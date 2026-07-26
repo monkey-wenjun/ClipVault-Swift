@@ -535,14 +535,8 @@ struct PanelView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
-                isSelected
-                    ? activeColor.opacity(0.12)
-                    : (tagColor ?? .primary).opacity(tagColor != nil ? 0.12 : 0.06),
+                isSelected ? activeColor.opacity(0.12) : Color.clear,
                 in: Capsule()
-            )
-            .overlay(
-                Capsule().stroke(isSelected ? activeColor.opacity(0.5) : Color.clear,
-                                 lineWidth: 1)
             )
             .contentShape(Capsule())
             .hoverEffect(radius: 15)
@@ -600,12 +594,8 @@ struct PanelView: View {
             .foregroundStyle(isSelected ? Color.accentColor : .primary)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.06),
+            .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear,
                         in: Capsule())
-            .overlay(
-                Capsule().stroke(isSelected ? Color.accentColor.opacity(0.5) : Color.clear,
-                                 lineWidth: 1)
-            )
             .contentShape(Capsule())
             .hoverEffect(radius: 15)
     }

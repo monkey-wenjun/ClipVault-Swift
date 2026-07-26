@@ -47,8 +47,8 @@ final class PanelViewModel: ObservableObject {
             markedIDs = []
         }
     }
-    /// 是否选中了“剪贴板”tab。默认 false，表示初始状态没有任何 tab 被选中。
-    @Published var selectedHistoryTab = false {
+    /// 是否选中了“剪贴板”tab。默认 true，初始状态高亮“剪贴板”。
+    @Published var selectedHistoryTab = true {
         didSet {
             selectedIndex = -1
             markedIDs = []
@@ -568,7 +568,7 @@ final class PanelViewModel: ObservableObject {
         selectedIndex = -1
         markedIDs = []
         cancelRenaming()
-        selectedHistoryTab = false
+        selectedHistoryTab = true
         selectedTab = nil
     }
 }
