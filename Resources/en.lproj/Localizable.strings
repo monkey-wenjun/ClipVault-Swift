@@ -136,8 +136,8 @@
 "粘贴" = "Paste";
 "打开 JSON 查看器" = "Open JSON Viewer";
 "预览" = "Preview";
-"移动到集合" = "Move to pinboard";
-"新建集合并移入" = "New pinboard and move";
+"钉到分类" = "Pin to category";
+"新建标签并移入" = "New tag and move";
 "从集合移除" = "Remove from pinboard";
 
 /* AppDelegate.swift */

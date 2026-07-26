@@ -618,7 +618,7 @@ struct PanelView: View {
                 Button(pinboard.name) { viewModel.addToPinboard(item, pinboardID: pinboard.id) }
             }
             if !viewModel.pinboards.isEmpty { Divider() }
-            Button("新建集合并移入") { viewModel.quickAddPinboard(with: item) }
+            Button("新建标签并移入") { viewModel.quickAddPinboard(with: item) }
         }
         Button(deleteTitle(for: item)) { viewModel.deleteMarkedOrItem(item) }
     }
