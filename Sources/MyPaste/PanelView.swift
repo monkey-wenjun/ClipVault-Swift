@@ -613,7 +613,7 @@ struct PanelView: View {
         if item.kind == .text {
             Button("预览") { viewModel.textPreviewHandler?(item) }
         }
-        Menu("移动到集合") {
+        Menu("钉到分类") {
             ForEach(viewModel.pinboards) { pinboard in
                 Button(pinboard.name) { viewModel.addToPinboard(item, pinboardID: pinboard.id) }
             }
