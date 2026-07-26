@@ -167,6 +167,35 @@ final class HistoryStore: ObservableObject {
         save()
     }
 
+    /// 根据 CloseTicketTagger 配置同步「归因类型」集合。
+    /// 集合不存在时新建；配置文件缺失时保留空集合，避免显示过期内容。
+    func syncAttributionPinboard(with config: CloseTicketTagConfig?) {
+        let name = CloseTicketTagger.pinboardName
+        let tagItems: [ClipboardItem]
+        if let config {
+            tagItems = config.tags.map { tag in
+                ClipboardItem(id: UUID(), kind: .text, text: tag,
+                              imageFile: nil, fileSize: nil,
+                              createdAt: Date(), sourceBundleID: nil,
+                              prefix: config.prefix, suffix: config.suffix)
+            }
+        } else {
+            tagItems = []
+        }
+        if let index = pinboards.firstIndex(where: { $0.name == name }) {
+            pinboards[index].items = tagItems
+        } else {
+            let palette = Pinboard.colorPalette
+            let used = Set(pinboards.compactMap(\.colorHex))
+            let color = palette.first { !used.contains($0.hex) }?.hex
+                ?? palette[pinboards.count % palette.count].hex
+            var pinboard = Pinboard(name: name, colorHex: color)
+            pinboard.items = tagItems
+            pinboards.append(pinboard)
+        }
+        save()
+    }
+
     /// 拖拽排序：把 draggedID 移动到 targetID 的位置
     func movePinboard(draggedID: UUID, onto targetID: UUID) {
         guard let from = pinboards.firstIndex(where: { $0.id == draggedID }),

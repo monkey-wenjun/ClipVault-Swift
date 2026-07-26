@@ -27,10 +27,14 @@ struct ClipboardItem: Codable, Identifiable, Equatable {
     var fileSize: Int?
     var createdAt: Date
     var sourceBundleID: String?
+    /// 仅用于「归因类型」等模板条目：粘贴时前后拼接的字符串
+    var prefix: String?
+    var suffix: String?
 
     /// 粘贴时写入剪贴板的文本
     var pasteContent: String {
-        text ?? ""
+        if let prefix, let suffix, let text { return prefix + text + suffix }
+        return text ?? ""
     }
 
     var footer: String {
