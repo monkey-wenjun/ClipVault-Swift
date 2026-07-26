@@ -17,6 +17,8 @@
 - 筛选气泡（NSPopover）：按类型（文本/链接/颜色/图片）、来源应用、图钉板组合筛选
 - 键盘：←/→ 选择、回车粘贴、⌘1…9 快速粘贴、⌘←/→ 切换标签、Delete 删除、Esc 关闭
 - 多选：单击标记、⌘A 全选（可自定义）、Delete 批量删除、右键批量删除
+- 标签栏：仅当前选中标签显示底色，其余标签无背景
+- 默认选中「剪贴板」标签
 
 **标签集合（Pinboard）**
 - `+` 即建"未命名"标签，自动分配未占用颜色；双击重命名（失焦自动保存）
@@ -83,7 +85,7 @@ Keychain ACL 在每次构建后失效。
 ## 架构
 
 ```
-Sources/ClipVault/
+Sources/MyPaste/
 ├── main.swift              # 入口，accessory 模式（无 Dock 图标）
 ├── AppDelegate.swift       # 装配各模块、菜单栏（左键面板/右键菜单）、定时暂停菜单
 ├── ClipboardItem.swift     # 条目模型与各类缓存
@@ -108,7 +110,12 @@ Sources/ClipVault/
 - **多屏**：菜单锚定用 `convertPoint(fromScreen:)` 两步转换，避免全局坐标偏移
 - **非激活面板**：键盘事件用本地 monitor 分发；文本编辑时放行编辑按键
 
+## 分支说明
+
+- `main`：基础版本，维护日常 UI 与交互修复。
+- `feature/close-ticket-tagger`：在 `main` 基础上集成 CloseTicketTagger，
+  自动创建「归因类型」集合并支持 `prefix + tag + suffix` 的粘贴拼接。
+
 ## 作者
 
 阿文 · [www.awen.me](https://www.awen.me) · hi@awen.me
-# myPaste
