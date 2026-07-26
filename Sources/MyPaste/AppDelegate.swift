@@ -30,6 +30,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         applyRunInBackground()
 
         store = HistoryStore()
+        if let tagConfig = CloseTicketTagger.loadConfig() {
+            store.syncAttributionPinboard(with: tagConfig)
+        }
         monitor = ClipboardMonitor(store: store, settings: settings)
         monitor.start()
         pasteService = PasteService(store: store, monitor: monitor, settings: settings)
