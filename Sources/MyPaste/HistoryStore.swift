@@ -168,19 +168,15 @@ final class HistoryStore: ObservableObject {
     }
 
     /// 根据 CloseTicketTagger 配置同步「归因类型」集合。
-    /// 集合不存在时新建；配置文件缺失时保留空集合，避免显示过期内容。
+    /// 配置文件必须存在才会创建/刷新集合；文件缺失时不执行任何操作。
     func syncAttributionPinboard(with config: CloseTicketTagConfig?) {
+        guard let config else { return }
         let name = CloseTicketTagger.pinboardName
-        let tagItems: [ClipboardItem]
-        if let config {
-            tagItems = config.tags.map { tag in
-                ClipboardItem(id: UUID(), kind: .text, text: tag,
-                              imageFile: nil, fileSize: nil,
-                              createdAt: Date(), sourceBundleID: nil,
-                              prefix: config.prefix, suffix: config.suffix)
-            }
-        } else {
-            tagItems = []
+        let tagItems = config.tags.map { tag in
+            ClipboardItem(id: UUID(), kind: .text, text: tag,
+                          imageFile: nil, fileSize: nil,
+                          createdAt: Date(), sourceBundleID: nil,
+                          prefix: config.prefix, suffix: config.suffix)
         }
         if let index = pinboards.firstIndex(where: { $0.name == name }) {
             pinboards[index].items = tagItems
