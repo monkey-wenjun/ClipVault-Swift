@@ -4,6 +4,10 @@
 
 纯 SwiftPM 可执行目标 + 打包脚本，无 Xcode 工程。
 
+## 演示视频
+
+[![花了一个晚上搓了个原本需要付费的app](https://i0.hdslb.com/bfs/archive/5b8d28fd9f08d6192a3389e672ed7a6049565d31.jpg)](https://www.bilibili.com/video/BV1jf3L6MEBh/)
+
 ## 功能
 
 **剪贴板历史**
