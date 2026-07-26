@@ -821,6 +821,7 @@ struct AboutView: View {
                         Image(nsImage: image)
                             .resizable()
                             .frame(width: 48, height: 48)
+                            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                     } else {
                         Image(systemName: "doc.on.clipboard")
                             .font(.system(size: 32))
