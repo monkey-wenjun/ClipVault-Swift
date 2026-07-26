@@ -306,7 +306,7 @@ final class AppSettings: ObservableObject {
         appearance = AppAppearance(rawValue: defaults.string(forKey: "appAppearance") ?? "") ?? .system
         panelPosition = PanelPosition(rawValue: defaults.string(forKey: "panelPosition") ?? "") ?? .bottom
         language = AppLanguage(rawValue: defaults.string(forKey: "appLanguage") ?? "") ?? .system
-        retention = Retention(rawValue: defaults.integer(forKey: "retentionDays")) ?? .month
+        retention = Retention(rawValue: defaults.integer(forKey: "retentionDays")) ?? .forever
         pasteTarget = PasteTarget(rawValue: defaults.string(forKey: "pasteTarget") ?? "") ?? .activeApp
         // 默认开启：不保存机密/瞬时内容
         ignoreConfidential = defaults.object(forKey: "ignoreConfidential") as? Bool ?? true
