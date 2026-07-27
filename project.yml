@@ -1,0 +1,50 @@
+name: ClipVault
+targets:
+  ClipVault:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/MyPaste
+        createIntermediateGroups: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.awen.ClipVault
+        INFOPLIST_FILE: $(SRCROOT)/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: $(SRCROOT)/Resources/ClipVault.entitlements
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: NO
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+        COMBINE_HIDPI_IMAGES: YES
+      configs:
+        Release:
+          SWIFT_OPTIMIZATION_LEVEL: -O
+          SWIFT_COMPILATION_MODE: wholemodule
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleDisplayName: ClipVault
+        CFBundleIconFile: ClipVault
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "2"
+        LSMinimumSystemVersion: "14.0"
+        LSUIElement: true
+    entitlements:
+      path: Resources/ClipVault.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected-read-write: true
+    postBuildScripts:
+      - script: |
+          mkdir -p "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          rsync -a --delete \
+            --exclude="Info.plist" \
+            --exclude="ClipVault.entitlements" \
+            --exclude="icon-variants" \
+            --exclude="ClipVault.iconset" \
+            "${SRCROOT}/Resources/" "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/"
+        name: Copy Resources to Bundle
+        shell: /bin/sh

@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Swift / SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+*.xcuserstate
+
+# Build artifacts
+build/
+dist/
+ClipVault/
+ClipVault.zip
