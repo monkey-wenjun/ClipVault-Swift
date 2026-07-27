@@ -71,6 +71,10 @@ struct PanelView: View {
         .padding(.vertical, 14)
         .onChange(of: focusedField) { _, newFocus in handleFocusChange(newFocus) }
         .onChange(of: viewModel.focusSearchToken) { _, _ in focusedField = .search }
+        .onChange(of: viewModel.blurSearchToken) { _, _ in focusedField = nil }
+        .onChange(of: viewModel.searchExpanded) { _, expanded in
+            if !expanded { focusedField = nil }
+        }
     }
 
     private var verticalBody: some View {
@@ -85,6 +89,10 @@ struct PanelView: View {
         .padding(.vertical, 14)
         .onChange(of: focusedField) { _, newFocus in handleFocusChange(newFocus) }
         .onChange(of: viewModel.focusSearchToken) { _, _ in focusedField = .search }
+        .onChange(of: viewModel.blurSearchToken) { _, _ in focusedField = nil }
+        .onChange(of: viewModel.searchExpanded) { _, expanded in
+            if !expanded { focusedField = nil }
+        }
     }
 
     private var cardArea: some View {
@@ -490,7 +498,10 @@ struct PanelView: View {
         } else {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) { viewModel.searchExpanded = true }
-                focusedField = .search
+                // 等 TextField 渲染出来后再对焦，避免动画期间焦点设置失效
+                DispatchQueue.main.async {
+                    focusedField = .search
+                }
             } label: {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 13))

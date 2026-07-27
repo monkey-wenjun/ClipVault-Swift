@@ -83,6 +83,8 @@ final class PanelViewModel: ObservableObject {
     var suppressFocusLoss = false
     /// 递增令牌：请求 PanelView 把焦点还给搜索框
     @Published var focusSearchToken = 0
+    /// 递增令牌：请求 PanelView 把焦点从搜索框移走（按 Tab 切换到结果卡片）
+    @Published var blurSearchToken = 0
 
     /// 内容类型
     enum ContentType: String, CaseIterable, Identifiable {
@@ -571,6 +573,7 @@ final class PanelViewModel: ObservableObject {
 
     func resetState() {
         search = ""
+        searchExpanded = false
         selectedIndex = -1
         markedIDs = []
         cancelRenaming()
@@ -846,8 +849,20 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
                 if viewModel.editingTagName { return event }
                 viewModel.pasteSelected()
                 return nil
-            case 48: // Tab：切换卡片
-                if editing { return event }
+            case 48: // Tab：编辑搜索框时跳到第一个结果卡片；否则切换卡片
+                if editing {
+                    // 仅普通 Tab（非 Shift）且搜索有结果时才切换
+                    guard !event.modifierFlags.contains(.shift),
+                          !viewModel.search.isEmpty,
+                          !viewModel.filtered.isEmpty else { return event }
+                    viewModel.suppressFocusLoss = true
+                    viewModel.selectedIndex = 0
+                    viewModel.blurSearchToken += 1
+                    DispatchQueue.main.async {
+                        viewModel.suppressFocusLoss = false
+                    }
+                    return nil
+                }
                 if event.modifierFlags.contains(.option) {
                     let delta = event.modifierFlags.contains(.shift) ? -1 : 1
                     viewModel.selectTabOffset(delta)
