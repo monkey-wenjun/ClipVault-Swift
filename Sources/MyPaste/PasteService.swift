@@ -40,8 +40,9 @@ final class PasteService {
             return
         }
         if let app {
-            // macOS 14+ 用新的激活 API，旧的 activate(options:) 已失效
-            app.activate(from: .current, options: [.activateAllWindows])
+            // macOS 13 仍使用旧版 activate(options:)；macOS 14+ 推荐的新 API
+            // activate(from:options:) 在此不可用。
+            app.activate(options: [.activateAllWindows])
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             self?.postCommandV()

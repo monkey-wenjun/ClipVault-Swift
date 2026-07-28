@@ -69,10 +69,10 @@ struct PanelView: View {
             }))
         }
         .padding(.vertical, 14)
-        .onChange(of: focusedField) { _, newFocus in handleFocusChange(newFocus) }
-        .onChange(of: viewModel.focusSearchToken) { _, _ in focusedField = .search }
-        .onChange(of: viewModel.blurSearchToken) { _, _ in focusedField = nil }
-        .onChange(of: viewModel.searchExpanded) { _, expanded in
+        .onChange(of: focusedField) { newFocus in handleFocusChange(newFocus) }
+        .onChange(of: viewModel.focusSearchToken) { _ in focusedField = .search }
+        .onChange(of: viewModel.blurSearchToken) { _ in focusedField = nil }
+        .onChange(of: viewModel.searchExpanded) { expanded in
             if !expanded { focusedField = nil }
         }
     }
@@ -87,10 +87,10 @@ struct PanelView: View {
             }
         }
         .padding(.vertical, 14)
-        .onChange(of: focusedField) { _, newFocus in handleFocusChange(newFocus) }
-        .onChange(of: viewModel.focusSearchToken) { _, _ in focusedField = .search }
-        .onChange(of: viewModel.blurSearchToken) { _, _ in focusedField = nil }
-        .onChange(of: viewModel.searchExpanded) { _, expanded in
+        .onChange(of: focusedField) { newFocus in handleFocusChange(newFocus) }
+        .onChange(of: viewModel.focusSearchToken) { _ in focusedField = .search }
+        .onChange(of: viewModel.blurSearchToken) { _ in focusedField = nil }
+        .onChange(of: viewModel.searchExpanded) { expanded in
             if !expanded { focusedField = nil }
         }
     }
@@ -273,6 +273,7 @@ struct PanelView: View {
 
     private func handleFocusChange(_ newFocus: PanelField?) {
         viewModel.textEditing = newFocus != nil
+        viewModel.searchFocused = (newFocus == .search)
         // 搜索框失焦即自动折叠并清空（筛选气泡展示期间除外）
         if newFocus != .search && viewModel.searchExpanded && !viewModel.suppressFocusLoss {
             withAnimation(.easeInOut(duration: 0.15)) { viewModel.searchExpanded = false }
@@ -322,7 +323,7 @@ struct PanelView: View {
             }
             .padding(.horizontal, 16)
         }
-        .onChange(of: viewModel.selectedIndex) { _, newIndex in
+        .onChange(of: viewModel.selectedIndex) { newIndex in
             let items = Array(viewModel.filtered.prefix(viewModel.visibleCount))
             guard items.indices.contains(newIndex) else { return }
             proxy.scrollTo(items[newIndex].id)
@@ -345,7 +346,7 @@ struct PanelView: View {
             }
             .padding(.vertical, 12)
         }
-        .onChange(of: viewModel.selectedIndex) { _, newIndex in
+        .onChange(of: viewModel.selectedIndex) { newIndex in
             let items = Array(viewModel.filtered.prefix(viewModel.visibleCount))
             guard items.indices.contains(newIndex) else { return }
             proxy.scrollTo(items[newIndex].id)

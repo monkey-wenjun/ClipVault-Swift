@@ -143,6 +143,8 @@ final class PanelViewModel: ObservableObject {
     @Published var renamingName = ""
     /// 搜索框或标签输入框持有焦点时，键盘监控放行编辑按键（Delete/方向键/Return 等）
     var textEditing = false
+    /// 搜索框是否持有焦点（用于 Esc 优先取消搜索）
+    var searchFocused = false
 
     /// 正在内联编辑标签名
     var editingTagName: Bool { renamingTagID != nil }
@@ -595,12 +597,15 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
 
     private var panel: KeyablePanel?
     private var eventMonitor: Any?
+    private var scrollWheelMonitor: Any?
     private var previousApp: NSRunningApplication?
     private var suppressAutoHide = false
     private var filterPopover: NSPopover?
     private let settings: AppSettings
     private let onPaste: (ClipboardItem, NSRunningApplication?) -> Void
     private var cancellables = Set<AnyCancellable>()
+    /// 当前面板是否为底部/顶部横向布局（左/右为竖向布局）。
+    private var isHorizontalLayout: Bool = false
     var showJSONHandler: ((ClipboardItem) -> Void)?
 
     /// 面板右上 ··· 菜单的内容来源（由 AppDelegate 提供，与菜单栏菜单共用）
@@ -632,12 +637,15 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     }
 
     private func observeSettings() {
+        isHorizontalLayout = !settings.panelPosition.isVertical
         settings.$panelPosition
             .dropFirst()
-            .sink { [weak self] _ in
-                guard let self, self.isVisible, let panel = self.panel,
+            .sink { [weak self] position in
+                guard let self else { return }
+                self.isHorizontalLayout = !position.isVertical
+                guard self.isVisible, let panel = self.panel,
                       let screen = panel.screen ?? NSScreen.main else { return }
-                let frame = self.panelFrame(for: self.settings.panelPosition, on: screen)
+                let frame = self.panelFrame(for: position, on: screen)
                 panel.setFrame(frame, display: true, animate: true)
             }
             .store(in: &cancellables)
@@ -665,6 +673,7 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         panel.orderFrontRegardless()
         panel.makeKey()
         installKeyMonitor()
+        installScrollWheelMonitor()
     }
 
     private func panelFrame(for position: PanelPosition, on screen: NSScreen) -> NSRect {
@@ -724,6 +733,7 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
 
     func hide() {
         removeKeyMonitor()
+        removeScrollWheelMonitor()
         panel?.orderOut(nil)
     }
 
@@ -838,8 +848,17 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
             let editing = viewModel.textEditing
             let hasCommand = event.modifierFlags.contains(.command)
             switch event.keyCode {
-            case 53: // Esc：先取消多选标记，其次交还输入框，最后收起面板
-                if editing { return event }
+            case 53: // Esc：搜索框内优先取消搜索，其次取消多选标记，最后收起面板
+                if viewModel.searchFocused {
+                    viewModel.search = ""
+                    if viewModel.searchExpanded {
+                        withAnimation(.easeInOut(duration: 0.15)) { viewModel.searchExpanded = false }
+                        return nil
+                    }
+                    self.hide()
+                    return nil
+                }
+                if viewModel.editingTagName { return event }
                 if !viewModel.markedIDs.isEmpty {
                     viewModel.markedIDs = []
                     return nil
@@ -927,6 +946,24 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
                     viewModel.pasteNumber(n)
                     return nil
                 }
+
+                // 面板唤起后，按任意可打印字符直接进入搜索框输入
+                if !editing,
+                   let characters = event.characters,
+                   characters.count == 1,
+                   let char = characters.first,
+                   Self.isPrintableSearchInput(char, event: event) {
+                    if !viewModel.searchExpanded {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            viewModel.searchExpanded = true
+                        }
+                        viewModel.search = String(char)
+                    } else {
+                        viewModel.search.append(char)
+                    }
+                    viewModel.focusSearchToken += 1
+                    return nil
+                }
                 return event
             }
         }
@@ -936,6 +973,32 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         if let eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
             self.eventMonitor = nil
+        }
+    }
+
+    // MARK: - 鼠标滚轮横向滚动适配
+
+    /// 在底部/顶部横向布局时，将传统鼠标竖向滚轮事件转换为横向滚动事件，
+    /// 避免鼠标用户必须按住 Shift 才能横向翻滚内容。触控板/Magic Mouse 等
+    /// 精确滚动设备保持原行为，仍可两指/横向轻扫滚动。
+    private func installScrollWheelMonitor() {
+        removeScrollWheelMonitor()
+        scrollWheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self,
+                  self.isHorizontalLayout,
+                  event.window === self.panel,
+                  !event.hasPreciseScrollingDeltas,
+                  abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) else {
+                return event
+            }
+            return event.withSwappedScrollDeltas() ?? event
+        }
+    }
+
+    private func removeScrollWheelMonitor() {
+        if let scrollWheelMonitor {
+            NSEvent.removeMonitor(scrollWheelMonitor)
+            self.scrollWheelMonitor = nil
         }
     }
 
@@ -953,5 +1016,37 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         case 25: return 9
         default: return nil
         }
+    }
+
+    /// 判断按键是否为可直接进入搜索框的可打印字符（允许 Shift 大小写，排除 Command/Option/Control）
+    private static func isPrintableSearchInput(_ char: Character, event: NSEvent) -> Bool {
+        let activeModifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        guard activeModifiers.isSubset(of: .shift) else { return false }
+        return char.isLetter || char.isNumber || char.isPunctuation || char.isSymbol || char.isMathSymbol || char.isCurrencySymbol
+    }
+}
+
+private extension NSEvent {
+    /// 返回一个滚动轴被交换的新事件：竖向 delta 移到横向，横向 delta 移到竖向。
+    /// 用于把传统鼠标竖向滚轮转成横向滚动。
+    func withSwappedScrollDeltas() -> NSEvent? {
+        guard let cgEvent = self.cgEvent?.copy() else { return nil }
+
+        let deltaY = cgEvent.getIntegerValueField(.scrollWheelEventDeltaAxis1)
+        let deltaX = cgEvent.getIntegerValueField(.scrollWheelEventDeltaAxis2)
+        cgEvent.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: deltaX)
+        cgEvent.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: deltaY)
+
+        let pointDeltaY = cgEvent.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)
+        let pointDeltaX = cgEvent.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)
+        cgEvent.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: pointDeltaX)
+        cgEvent.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: pointDeltaY)
+
+        let fixedDeltaY = cgEvent.getIntegerValueField(.scrollWheelEventFixedPtDeltaAxis1)
+        let fixedDeltaX = cgEvent.getIntegerValueField(.scrollWheelEventFixedPtDeltaAxis2)
+        cgEvent.setIntegerValueField(.scrollWheelEventFixedPtDeltaAxis1, value: fixedDeltaX)
+        cgEvent.setIntegerValueField(.scrollWheelEventFixedPtDeltaAxis2, value: fixedDeltaY)
+
+        return NSEvent(cgEvent: cgEvent)
     }
 }

@@ -3,7 +3,7 @@ targets:
   ClipVault:
     type: application
     platform: macOS
-    deploymentTarget: "14.0"
+    deploymentTarget: "13.0"
     sources:
       - path: Sources/MyPaste
         createIntermediateGroups: true
@@ -29,7 +29,7 @@ targets:
         CFBundleIconFile: ClipVault
         CFBundleShortVersionString: "1.0.0"
         CFBundleVersion: "2"
-        LSMinimumSystemVersion: "14.0"
+        LSMinimumSystemVersion: "13.0"
         LSUIElement: true
     entitlements:
       path: Resources/ClipVault.entitlements

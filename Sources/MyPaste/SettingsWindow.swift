@@ -802,9 +802,9 @@ private struct ImageHostingEditor: View {
                 }
                 .disabled(testing)
                 Button("取消") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(.init(.escape, modifiers: []))
                 Button("保存") { onSave() }
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(.init(.return, modifiers: []))
             }
         }
         .padding(20)

@@ -46,7 +46,7 @@
 
 ## 构建与运行
 
-要求：macOS 14+，Xcode（Swift toolchain）。
+要求：macOS 13+，Xcode（Swift toolchain）。
 
 ```bash
 ./build.sh && open build/ClipVault.app
