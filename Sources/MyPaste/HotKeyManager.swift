@@ -13,8 +13,9 @@ final class HotKeyManager {
         unregisterAll()
         installHandlerIfNeeded()
         for (action, shortcut) in shortcuts {
-            // 全选是面板内快捷键，不做全局注册
-            if action == .selectAll { continue }
+            // 只有「启动 ClipVault」和「上传图片到图床」保持全局注册；
+            // 其余快捷键改为面板打开时本地监听。
+            guard action == .showPanel || action == .uploadToImageHosting else { continue }
             register(shortcut, action: action)
         }
     }

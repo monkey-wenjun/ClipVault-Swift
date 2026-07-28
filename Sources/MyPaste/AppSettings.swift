@@ -296,6 +296,10 @@ final class AppSettings: ObservableObject {
             saveImageHostingConfigs()
         }
     }
+    /// 被用户显式禁用的快捷键。这里用 Set 保存，避免把“未设置”和“已禁用”搞混。
+    @Published var disabledShortcuts: Set<HotKeyAction> {
+        didSet { saveShortcuts() }
+    }
     @Published private(set) var shortcuts: [HotKeyAction: Shortcut] {
         didSet { saveShortcuts() }
     }
@@ -326,10 +330,17 @@ final class AppSettings: ObservableObject {
         Self.migrateCredentialsIfNeeded()
         imageHostingConfigs = Self.loadImageHostingConfigs()
 
+        // 加载被禁用的快捷键（旧版本没有该字段时为空）
+        let disabledRaw = defaults.stringArray(forKey: "disabledShortcuts") ?? []
+        let loadedDisabled = Set(disabledRaw.compactMap { HotKeyAction(rawValue: $0) })
+        disabledShortcuts = loadedDisabled
+
         var loaded: [HotKeyAction: Shortcut] = [:]
         for action in HotKeyAction.allCases {
-            if let data = defaults.data(forKey: "shortcut.\(action.rawValue)"),
-               let shortcut = try? JSONDecoder().decode(Shortcut.self, from: data) {
+            if loadedDisabled.contains(action) {
+                loaded[action] = nil
+            } else if let data = defaults.data(forKey: "shortcut.\(action.rawValue)"),
+                      let shortcut = try? JSONDecoder().decode(Shortcut.self, from: data) {
                 loaded[action] = shortcut
             } else {
                 loaded[action] = Self.defaultShortcuts[action]
@@ -339,14 +350,22 @@ final class AppSettings: ObservableObject {
     }
 
     func shortcut(for action: HotKeyAction) -> Shortcut? {
-        shortcuts[action]
+        guard !disabledShortcuts.contains(action) else { return nil }
+        return shortcuts[action] ?? Self.defaultShortcuts[action]
     }
 
     func setShortcut(_ shortcut: Shortcut?, for action: HotKeyAction) {
-        shortcuts[action] = shortcut
+        if let shortcut {
+            disabledShortcuts.remove(action)
+            shortcuts[action] = shortcut
+        } else {
+            disabledShortcuts.insert(action)
+            shortcuts[action] = nil
+        }
     }
 
     func resetShortcuts() {
+        disabledShortcuts.removeAll()
         shortcuts = Self.defaultShortcuts
     }
 
@@ -360,13 +379,16 @@ final class AppSettings: ObservableObject {
 
     private func saveShortcuts() {
         for action in HotKeyAction.allCases {
-            if let shortcut = shortcuts[action],
-               let data = try? JSONEncoder().encode(shortcut) {
+            if disabledShortcuts.contains(action) {
+                defaults.removeObject(forKey: "shortcut.\(action.rawValue)")
+            } else if let shortcut = shortcuts[action],
+                      let data = try? JSONEncoder().encode(shortcut) {
                 defaults.set(data, forKey: "shortcut.\(action.rawValue)")
             } else {
                 defaults.removeObject(forKey: "shortcut.\(action.rawValue)")
             }
         }
+        defaults.set(Array(disabledShortcuts.map(\.rawValue)), forKey: "disabledShortcuts")
     }
 
     private func saveImageHostingConfigs() {

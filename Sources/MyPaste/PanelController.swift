@@ -791,6 +791,7 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
                                  styleMask: [.borderless, .nonactivatingPanel],
                                  backing: .buffered, defer: false)
         panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
@@ -890,10 +891,34 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
                 if hasCommand { viewModel.selectTabOffset(1) } else { viewModel.moveSelection(1) }
                 return nil
             default:
+                let flags = event.modifierFlags.intersection([.command, .shift, .option, .control]).rawValue
+
+                // 搜索：面板内生效
+                if let shortcut = self.settings.shortcut(for: .search),
+                   event.keyCode == shortcut.keyCode,
+                   flags == shortcut.modifiers {
+                    self.focusSearch()
+                    return nil
+                }
+
+                // 下一个/上一个集合：面板内生效
+                if let shortcut = self.settings.shortcut(for: .nextPinboard),
+                   event.keyCode == shortcut.keyCode,
+                   flags == shortcut.modifiers {
+                    viewModel.selectTabOffset(1)
+                    return nil
+                }
+                if let shortcut = self.settings.shortcut(for: .prevPinboard),
+                   event.keyCode == shortcut.keyCode,
+                   flags == shortcut.modifiers {
+                    viewModel.selectTabOffset(-1)
+                    return nil
+                }
+
                 // 全选：读取设置中的快捷键（默认 ⌘A），编辑文本时交还输入框
                 if let shortcut = self.settings.shortcut(for: .selectAll),
                    event.keyCode == shortcut.keyCode,
-                   event.modifierFlags.intersection([.command, .shift, .option, .control]).rawValue == shortcut.modifiers {
+                   flags == shortcut.modifiers {
                     if editing { return event }
                     viewModel.markAll()
                     return nil

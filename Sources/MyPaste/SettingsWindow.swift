@@ -424,9 +424,23 @@ private struct ShortcutsTab: View {
                             onChanged()
                         }
                     ))
+                    .frame(width: 130)
+
+                    Button {
+                        settings.setShortcut(nil, for: action)
+                        onChanged()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(settings.shortcut(for: action) == nil)
+                    .help(NSLocalizedString("禁用此快捷键", comment: "Disable shortcut button help"))
                 }
             }
         }
+        Text("点击录制按钮设置快捷键，录制时按 Delete 也可禁用。已禁用的快捷键不会全局注册。")
+            .font(.caption).foregroundStyle(.secondary)
         Text("快速粘贴：⌘ Command + 1…9（面板打开时）")
             .font(.caption).foregroundStyle(.secondary)
         HStack {
@@ -974,7 +988,7 @@ final class ShortcutRecorderNSView: NSView {
         } else if let shortcut {
             button.title = shortcut.displayString
         } else {
-            button.title = NSLocalizedString("点击录制", comment: "Shortcut record button title")
+            button.title = NSLocalizedString("已禁用", comment: "Shortcut disabled button title")
         }
     }
 }

@@ -24,5 +24,10 @@ if [ -z "${IDENTITY:-}" ]; then
 fi
 codesign --force --sign "$IDENTITY" "$APP_DIR" >/dev/null
 
+echo "Installing to /Applications..."
+rm -rf "/Applications/ClipVault.app"
+cp -R "$APP_DIR" "/Applications/ClipVault.app"
+
 echo "Built $APP_DIR"
-echo "Run with: open $APP_DIR"
+echo "Installed /Applications/ClipVault.app"
+echo "Run with: open /Applications/ClipVault.app"
