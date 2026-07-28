@@ -822,6 +822,8 @@ private struct ImageHostingEditor: View {
 // MARK: - 关于（独立小窗口，从菜单栏菜单打开）
 
 struct AboutView: View {
+    @State private var isChecking = false
+
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
     }
@@ -848,6 +850,24 @@ struct AboutView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    Spacer()
+                    Button {
+                        guard !isChecking else { return }
+                        isChecking = true
+                        Task {
+                            await UpdateChecker.shared.checkForUpdatesManually()
+                            isChecking = false
+                        }
+                    } label: {
+                        if isChecking {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 14, height: 14)
+                        } else {
+                            Text(NSLocalizedString("检查更新", comment: "About view check for updates button"))
+                        }
+                    }
+                    .disabled(isChecking)
                 }
             }
 

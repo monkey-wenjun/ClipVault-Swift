@@ -611,6 +611,24 @@ private final class KeyablePanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+/// 托管 SwiftUI 面板的 NSHostingView，负责把传统鼠标竖向滚轮转成横向滚动。
+/// 这比 `NSEvent.addLocalMonitorForEvents` 更可靠：直接在响应链里处理事件，
+/// 避免生成的新 NSEvent 丢失窗口/位置信息导致 SwiftUI ScrollView 收不到。
+private final class PanelHostingView<Content: View>: NSHostingView<Content> {
+    var isHorizontalLayout: Bool = false
+
+    override func scrollWheel(with event: NSEvent) {
+        guard isHorizontalLayout,
+              !event.hasPreciseScrollingDeltas,
+              abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX),
+              let swapped = event.withSwappedScrollDeltas() else {
+            super.scrollWheel(with: event)
+            return
+        }
+        super.scrollWheel(with: swapped)
+    }
+}
+
 /// 屏幕底部的历史面板：⇧⌘V 呼出/收起，Esc 关闭，←/→ 选择，⌘←/→ 切换集合，
 /// 回车或 ⌘数字 粘贴，Delete 删除选中条目。
 @MainActor
@@ -842,9 +860,10 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         background.layer?.cornerRadius = 16
         background.layer?.masksToBounds = true
 
-        let hosting = NSHostingView(rootView: AppearanceRoot(settings: self.settings) {
+        let hosting = PanelHostingView(rootView: AppearanceRoot(settings: self.settings) {
             PanelView(viewModel: self.viewModel, position: self.settings.panelPosition)
         })
+        hosting.isHorizontalLayout = !settings.panelPosition.isVertical
         hosting.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(hosting)
         NSLayoutConstraint.activate([
@@ -1011,17 +1030,26 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     /// 在底部/顶部横向布局时，将传统鼠标竖向滚轮事件转换为横向滚动事件，
     /// 避免鼠标用户必须按住 Shift 才能横向翻滚内容。触控板/Magic Mouse 等
     /// 精确滚动设备保持原行为，仍可两指/横向轻扫滚动。
+    ///
+    /// 这里同时做了两层处理：
+    /// 1. `PanelHostingView.scrollWheel` 在响应链里直接转换并转发给 SwiftUI；
+    /// 2. 本地 Monitor 作为兜底，捕获那些没有落到 hosting view 上的事件
+    ///    （例如落在 SwiftUI ScrollView 内部时），通过 `NSApp.sendEvent` 派发。
     private func installScrollWheelMonitor() {
         removeScrollWheelMonitor()
         scrollWheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self,
                   self.isHorizontalLayout,
-                  event.window === self.panel,
+                  self.isVisible,
+                  let panel = self.panel,
                   !event.hasPreciseScrollingDeltas,
-                  abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) else {
+                  abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX),
+                  panel.frame.contains(NSEvent.mouseLocation),
+                  let swapped = event.withSwappedScrollDeltas() else {
                 return event
             }
-            return event.withSwappedScrollDeltas() ?? event
+            NSApp.sendEvent(swapped)
+            return nil
         }
     }
 
@@ -1056,7 +1084,7 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     }
 }
 
-private extension NSEvent {
+fileprivate extension NSEvent {
     /// 返回一个滚动轴被交换的新事件：竖向 delta 移到横向，横向 delta 移到竖向。
     /// 用于把传统鼠标竖向滚轮转成横向滚动。
     func withSwappedScrollDeltas() -> NSEvent? {

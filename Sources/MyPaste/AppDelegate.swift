@@ -135,6 +135,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         observeSettingsChanges()
         observeSystemAppearanceChanges()
         showOnboardingIfNeeded()
+
+        // 启动时异步检查更新（每天最多一次），失败静默。
+        Task.detached {
+            await UpdateChecker.shared.checkForUpdatesIfNeeded()
+        }
     }
 
     private func applyAppearance(_ appearance: AppAppearance) {
@@ -473,6 +478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private func populate(menu: NSMenu) {
         let items = [
             NSMenuItem(title: NSLocalizedString("关于 ClipVault", comment: "About menu item"), action: #selector(showAbout), keyEquivalent: ""),
+            NSMenuItem(title: NSLocalizedString("检查更新…", comment: "Check for updates menu item"), action: #selector(checkForUpdates), keyEquivalent: ""),
             NSMenuItem(title: NSLocalizedString("显示面板", comment: "Show panel menu item"), action: #selector(showPanel), keyEquivalent: ""),
             NSMenuItem(title: NSLocalizedString("新文本项", comment: "New text item menu item"), action: #selector(newTextItem), keyEquivalent: ""),
         ]
@@ -554,6 +560,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     @objc private func showSettings() {
         settingsWindow.show()
+    }
+
+    @objc private func checkForUpdates() {
+        Task.detached {
+            await UpdateChecker.shared.checkForUpdatesManually()
+        }
     }
 
     @objc private func showAbout() {
