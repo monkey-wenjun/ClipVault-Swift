@@ -141,6 +141,9 @@ final class PanelViewModel: ObservableObject {
     /// 内联重命名标签状态
     @Published var renamingTagID: UUID?
     @Published var renamingName = ""
+    /// 内联重命名卡片标题状态
+    @Published var editingCardTitleID: UUID? = nil
+    @Published var editingCardTitle: String = ""
     /// 搜索框或标签输入框持有焦点时，键盘监控放行编辑按键（Delete/方向键/Return 等）
     var textEditing = false
     /// 搜索框是否持有焦点（用于 Esc 优先取消搜索）
@@ -538,6 +541,25 @@ final class PanelViewModel: ObservableObject {
         renamingName = ""
     }
 
+    // MARK: - 卡片标题重命名
+
+    func beginCardTitleEdit(_ item: ClipboardItem) {
+        editingCardTitleID = item.id
+        editingCardTitle = item.customTitle ?? item.kind.title
+    }
+
+    func commitCardTitleEdit() {
+        guard let id = editingCardTitleID else { return }
+        store.setCustomTitle(editingCardTitle, forItemID: id)
+        editingCardTitleID = nil
+        editingCardTitle = ""
+    }
+
+    func cancelCardTitleEdit() {
+        editingCardTitleID = nil
+        editingCardTitle = ""
+    }
+
     func addToPinboard(_ item: ClipboardItem, pinboardID: UUID) {
         store.addToPinboard(item, pinboardID: pinboardID)
     }
@@ -848,7 +870,7 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
             let editing = viewModel.textEditing
             let hasCommand = event.modifierFlags.contains(.command)
             switch event.keyCode {
-            case 53: // Esc：搜索框内优先取消搜索，其次取消多选标记，最后收起面板
+            case 53: // Esc：搜索框内优先取消搜索，其次取消卡片标题编辑，再其次取消多选标记，最后收起面板
                 if viewModel.searchFocused {
                     viewModel.search = ""
                     if viewModel.searchExpanded {
@@ -858,6 +880,10 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
                     self.hide()
                     return nil
                 }
+                if viewModel.editingCardTitleID != nil {
+                    viewModel.cancelCardTitleEdit()
+                    return nil
+                }
                 if viewModel.editingTagName { return event }
                 if !viewModel.markedIDs.isEmpty {
                     viewModel.markedIDs = []
@@ -865,7 +891,11 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
                 }
                 self.hide()
                 return nil
-            case 36: // Return：编辑标签名时用于提交；搜索时仍表示粘贴选中项
+            case 36: // Return：卡片标题编辑 / 标签名编辑时用于提交；否则粘贴选中项
+                if viewModel.editingCardTitleID != nil {
+                    viewModel.commitCardTitleEdit()
+                    return nil
+                }
                 if viewModel.editingTagName { return event }
                 viewModel.pasteSelected()
                 return nil

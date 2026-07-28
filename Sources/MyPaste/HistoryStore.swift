@@ -55,6 +55,21 @@ final class HistoryStore: ObservableObject {
         save()
     }
 
+    /// 为指定条目设置自定义标题；传 nil 或空字符串则恢复默认标题
+    func setCustomTitle(_ title: String?, forItemID id: UUID) {
+        let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let storedTitle = trimmed?.isEmpty == false ? trimmed : nil
+        if let index = items.firstIndex(where: { $0.id == id }) {
+            items[index].customTitle = storedTitle
+        }
+        for boardIndex in pinboards.indices {
+            if let itemIndex = pinboards[boardIndex].items.firstIndex(where: { $0.id == id }) {
+                pinboards[boardIndex].items[itemIndex].customTitle = storedTitle
+            }
+        }
+        save()
+    }
+
     @discardableResult
     func addImage(_ pngData: Data, sourceBundleID: String?) -> ClipboardItem? {
         // 去重：历史里已有相同图片数据时，只更新时间和来源，不新增条目

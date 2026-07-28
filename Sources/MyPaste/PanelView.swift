@@ -42,14 +42,16 @@ struct PanelView: View {
     @State private var isTargetedForDrop = false
 
     var body: some View {
-        let layout = Group {
+        Group {
             if position.isVertical {
                 verticalBody
             } else {
                 horizontalBody
             }
         }
-        return layout
+        .onChange(of: viewModel.editingCardTitleID) { _ in
+            viewModel.textEditing = viewModel.editingCardTitleID != nil || focusedField != nil
+        }
     }
 
     private var horizontalBody: some View {
@@ -272,7 +274,7 @@ struct PanelView: View {
     }
 
     private func handleFocusChange(_ newFocus: PanelField?) {
-        viewModel.textEditing = newFocus != nil
+        viewModel.textEditing = newFocus != nil || viewModel.editingCardTitleID != nil
         viewModel.searchFocused = (newFocus == .search)
         // 搜索框失焦即自动折叠并清空（筛选气泡展示期间除外）
         if newFocus != .search && viewModel.searchExpanded && !viewModel.suppressFocusLoss {
@@ -367,7 +369,12 @@ struct PanelView: View {
                      image: viewModel.cardImage(for: item),
                      tag: viewModel.searchTagMap[item.id],
                      fallbackBandColor: viewModel.fallbackBandColor(for: item),
-                     onBrokenImage: { viewModel.handleBrokenImage(item) })
+                     onBrokenImage: { viewModel.handleBrokenImage(item) },
+                     isEditingTitle: viewModel.editingCardTitleID == item.id,
+                     editingTitle: $viewModel.editingCardTitle,
+                     onBeginTitleEdit: { viewModel.beginCardTitleEdit(item) },
+                     onCommitTitleEdit: { viewModel.commitCardTitleEdit() },
+                     onCancelTitleEdit: { viewModel.cancelCardTitleEdit() })
                 .id(item.id)
                 .onTapGesture(count: 2) { viewModel.paste(item) }
                 .onTapGesture(count: 1) { viewModel.toggleMark(item) }
@@ -805,7 +812,18 @@ struct CardView: View {
     var fallbackBandColor: Color = .accentColor
     /// 图片加载失败（文件损坏/丢失）时回调，用于自动清除该条目
     var onBrokenImage: (() -> Void)? = nil
+    /// 是否正在编辑卡片标题
+    var isEditingTitle: Bool = false
+    /// 编辑中的标题文本（与 ViewModel 绑定）
+    @Binding var editingTitle: String
+    /// 双击标题进入编辑模式
+    var onBeginTitleEdit: (() -> Void)?
+    /// 提交标题修改
+    var onCommitTitleEdit: (() -> Void)?
+    /// 取消标题编辑
+    var onCancelTitleEdit: (() -> Void)?
     @State private var hovering = false
+    @FocusState private var titleFocused: Bool
 
     /// 头带底色：来源应用图标主色；无来源时用传入的回退色
     private var bandColor: Color {
@@ -834,12 +852,23 @@ struct CardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 头带：类型 + 时间 + 来源应用图标
+            // 头带：类型/自定义标题 + 时间 + 来源应用图标
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(item.kind.title)
-                        .font(.caption).bold()
-                        .foregroundStyle(.white)
+                    if isEditingTitle {
+                        TextField("", text: $editingTitle)
+                            .font(.caption).bold()
+                            .foregroundStyle(.white)
+                            .focused($titleFocused)
+                            .onSubmit { onCommitTitleEdit?() }
+                            .textFieldStyle(.plain)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text(item.displayTitle)
+                            .font(.caption).bold()
+                            .foregroundStyle(.white)
+                            .onTapGesture(count: 2) { onBeginTitleEdit?() }
+                    }
                     Text(item.relativeTime)
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.8))
@@ -901,6 +930,18 @@ struct CardView: View {
         .shadow(color: .black.opacity(hovering ? 0.4 : 0), radius: 6, y: 3)
         .animation(.easeInOut(duration: 0.12), value: hovering)
         .onHover { hovering = $0 }
+        .onChange(of: isEditingTitle) { editing in
+            if editing {
+                DispatchQueue.main.async { titleFocused = true }
+            } else {
+                titleFocused = false
+            }
+        }
+        .onChange(of: titleFocused) { focused in
+            if !focused && isEditingTitle {
+                onCommitTitleEdit?()
+            }
+        }
     }
 
     @ViewBuilder

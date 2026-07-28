@@ -77,6 +77,28 @@ Keychain ACL 在每次构建后失效。
 
 全部可在 设置 → 快捷键 中重新录制。
 
+## 常见问题
+
+### 首次打开提示“已损坏”或“无法验证开发者”
+
+因为 app 使用 Apple Development / ad-hoc 签名，没有提交 Mac App Store 公证，macOS Gatekeeper 可能会拦截：
+
+- **“ClipVault.app 已损坏，无法打开。你应该将它移到废纸篓。”**
+- **“无法打开 ClipVault.app，因为 Apple 无法检查其是否包含恶意软件。”**
+- **“无法打开 ClipVault.app，因为无法验证开发者。”**
+
+解决方法（按推荐顺序）：
+
+1. **右键打开**：在 Finder 中右键（或按住 Control 点按）`ClipVault.app` → **打开**，在弹出的对话框中再次点击 **打开**。
+2. **系统设置放行**：打开 **系统设置 → 隐私与安全性**，在“安全性”下面找到关于 ClipVault 的拦截记录，点击 **仍要打开**。
+3. **移除隔离属性**（最可靠）：在终端执行
+   ```bash
+   xattr -d com.apple.quarantine /Applications/ClipVault.app
+   ```
+   然后重新打开 app。
+
+> 注意：使用 ad-hoc 签名时 Gatekeeper 拦截会更严格，建议配置 Apple Development 证书后重新 `./build.sh`。
+
 ## 数据存储
 
 位置：`~/Library/Application Support/ClipVault/`（全部加密）

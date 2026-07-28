@@ -27,9 +27,16 @@ struct ClipboardItem: Codable, Identifiable, Equatable {
     var fileSize: Int?
     var createdAt: Date
     var sourceBundleID: String?
+    /// 用户自定义的卡片标题，用于快速识别内容；为空时显示 kind.title
+    var customTitle: String?
     /// 仅用于「归因类型」等模板条目：粘贴时前后拼接的字符串
     var prefix: String?
     var suffix: String?
+
+    /// 卡片头带展示的标题：优先使用用户自定义名称
+    var displayTitle: String {
+        customTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? kind.title
+    }
 
     /// 粘贴时写入剪贴板的文本
     var pasteContent: String {
