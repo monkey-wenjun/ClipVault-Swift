@@ -61,6 +61,8 @@ final class PanelViewModel: ObservableObject {
             }
         }
     }
+    /// 面板当前尺寸（由 PanelController 在显示/拖拽时更新，驱动卡片缩放）
+    @Published var panelSize: CGSize = .zero
     /// 记住上次选择的搜索范围（UserDefaults 持久化）
     @Published var searchScope: SearchScope = .all {
         didSet {
@@ -629,6 +631,186 @@ private final class PanelHostingView<Content: View>: NSHostingView<Content> {
     }
 }
 
+/// 主面板毛玻璃背景：用 CAShapeLayer 圆角遮罩精确裁剪，
+/// 修复 .hudWindow 材质在圆角外残留白色/浅色像素的问题。
+private final class RoundedPanelBackgroundView: NSVisualEffectView {
+    var cornerRadius: CGFloat = 16
+    private let maskLayer = CAShapeLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        layer?.mask = maskLayer
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        layer?.mask = maskLayer
+    }
+
+    override func layout() {
+        super.layout()
+        maskLayer.frame = bounds
+        maskLayer.path = CGPath(roundedRect: bounds,
+                                cornerWidth: cornerRadius,
+                                cornerHeight: cornerRadius,
+                                transform: nil)
+    }
+}
+
+/// 面板边缘/角落拖拽调整大小的透明覆盖层。
+/// 只在边缘/角落区域拦截鼠标事件，其余区域放行给下层 SwiftUI 内容。
+private struct PanelResizeEdge: OptionSet {
+    let rawValue: UInt8
+    static let minX = PanelResizeEdge(rawValue: 1 << 0) // 左边缘
+    static let maxX = PanelResizeEdge(rawValue: 1 << 1) // 右边缘
+    static let minY = PanelResizeEdge(rawValue: 1 << 2) // 下边缘
+    static let maxY = PanelResizeEdge(rawValue: 1 << 3) // 上边缘
+}
+
+private final class PanelResizeOverlay: NSView {
+    var positionProvider: () -> PanelPosition
+    var onResize: (NSRect) -> Void
+    var onResizeEnd: (NSRect) -> Void
+
+    private let edgeThickness: CGFloat = 6
+    private let cornerSize: CGFloat = 12
+    private var startEdges: PanelResizeEdge = []
+    private var startFrame: NSRect = .zero
+    private var startLocation: NSPoint = .zero
+    private var isResizing = false
+
+    init(positionProvider: @escaping () -> PanelPosition,
+         onResize: @escaping (NSRect) -> Void,
+         onResizeEnd: @escaping (NSRect) -> Void) {
+        self.positionProvider = positionProvider
+        self.onResize = onResize
+        self.onResizeEnd = onResizeEnd
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        edges(at: point).isEmpty ? nil : self
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        let b = bounds
+        guard b.width > 0, b.height > 0 else { return }
+        let t = edgeThickness
+        let c = cornerSize
+        addCursorRect(NSRect(x: c, y: b.maxY - t, width: b.width - c * 2, height: t), cursor: .resizeUpDown)
+        addCursorRect(NSRect(x: c, y: 0, width: b.width - c * 2, height: t), cursor: .resizeUpDown)
+        addCursorRect(NSRect(x: 0, y: c, width: t, height: b.height - c * 2), cursor: .resizeLeftRight)
+        addCursorRect(NSRect(x: b.maxX - t, y: c, width: t, height: b.height - c * 2), cursor: .resizeLeftRight)
+        addCursorRect(NSRect(x: 0, y: b.maxY - c, width: c, height: c), cursor: cornerCursor(.topLeft))
+        addCursorRect(NSRect(x: b.maxX - c, y: 0, width: c, height: c), cursor: cornerCursor(.bottomRight))
+        addCursorRect(NSRect(x: b.maxX - c, y: b.maxY - c, width: c, height: c), cursor: cornerCursor(.topRight))
+        addCursorRect(NSRect(x: 0, y: 0, width: c, height: c), cursor: cornerCursor(.bottomLeft))
+    }
+
+    private enum PanelCorner {
+        case topLeft, topRight, bottomLeft, bottomRight
+    }
+
+    /// macOS 15+ 用系统对角缩放光标；旧系统回退为轴向光标
+    private func cornerCursor(_ corner: PanelCorner) -> NSCursor {
+        if #available(macOS 15.0, *) {
+            let position: NSCursor.FrameResizePosition
+            switch corner {
+            case .topLeft: position = .topLeft
+            case .topRight: position = .topRight
+            case .bottomLeft: position = .bottomLeft
+            case .bottomRight: position = .bottomRight
+            }
+            return NSCursor.frameResize(position: position, directions: .all)
+        }
+        switch corner {
+        case .topLeft, .bottomRight: return .resizeUpDown
+        case .topRight, .bottomLeft: return .resizeLeftRight
+        }
+    }
+
+    private func edges(at point: NSPoint) -> PanelResizeEdge {
+        let b = bounds
+        let t = edgeThickness
+        let c = cornerSize
+        if point.x < c && point.y > b.maxY - c { return [.minX, .maxY] }        // 左上角
+        if point.x > b.maxX - c && point.y > b.maxY - c { return [.maxX, .maxY] } // 右上角
+        if point.x < c && point.y < c { return [.minX, .minY] }                  // 左下角
+        if point.x > b.maxX - c && point.y < c { return [.maxX, .minY] }         // 右下角
+        var result: PanelResizeEdge = []
+        if point.x < t { result.insert(.minX) }
+        if point.x > b.maxX - t { result.insert(.maxX) }
+        if point.y < t { result.insert(.minY) }
+        if point.y > b.maxY - t { result.insert(.maxY) }
+        return result
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let detected = edges(at: point)
+        guard !detected.isEmpty, let window else { return }
+        startEdges = detected
+        startFrame = window.frame
+        startLocation = event.locationInWindow
+        isResizing = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isResizing, let window else { return }
+        let dx = event.locationInWindow.x - startLocation.x
+        let dy = event.locationInWindow.y - startLocation.y
+        var frame = startFrame
+        let position = positionProvider()
+        let minSize = minimumSize(for: position)
+        let maxSize = maximumSize(for: window.screen)
+
+        if startEdges.contains(.maxY) {
+            let height = min(max(startFrame.height + dy, minSize.height), maxSize.height)
+            frame.size.height = height
+        } else if startEdges.contains(.minY) {
+            let height = min(max(startFrame.height - dy, minSize.height), maxSize.height)
+            frame.origin.y = startFrame.maxY - height
+            frame.size.height = height
+        }
+        if startEdges.contains(.maxX) {
+            let width = min(max(startFrame.width + dx, minSize.width), maxSize.width)
+            frame.size.width = width
+        } else if startEdges.contains(.minX) {
+            let width = min(max(startFrame.width - dx, minSize.width), maxSize.width)
+            frame.origin.x = startFrame.maxX - width
+            frame.size.width = width
+        }
+        onResize(frame)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isResizing else { return }
+        isResizing = false
+        onResizeEnd(window?.frame ?? startFrame)
+    }
+
+    private func minimumSize(for position: PanelPosition) -> CGSize {
+        position.isVertical ? CGSize(width: 280, height: 320) : CGSize(width: 420, height: 220)
+    }
+
+    private func maximumSize(for screen: NSScreen?) -> CGSize {
+        guard let screen else { return CGSize(width: 4096, height: 4096) }
+        let visible = screen.visibleFrame
+        let margin: CGFloat = 24
+        return CGSize(width: max(1, visible.width - margin * 2),
+                      height: max(1, visible.height - margin * 2))
+    }
+}
+
 /// 屏幕底部的历史面板：⇧⌘V 呼出/收起，Esc 关闭，←/→ 选择，⌘←/→ 切换集合，
 /// 回车或 ⌘数字 粘贴，Delete 删除选中条目。
 @MainActor
@@ -687,6 +869,7 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
                       let screen = panel.screen ?? NSScreen.main else { return }
                 let frame = self.panelFrame(for: position, on: screen)
                 panel.setFrame(frame, display: true, animate: true)
+                self.viewModel.panelSize = panel.frame.size
             }
             .store(in: &cancellables)
     }
@@ -704,6 +887,7 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         if let screen {
             let frame = panelFrame(for: settings.panelPosition, on: screen)
             panel.setFrame(frame, display: true)
+            viewModel.panelSize = panel.frame.size
         }
 
         if shouldStayVisibleWhenPanelResignsKey?() != true {
@@ -721,27 +905,45 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         let margin: CGFloat = 20
         let horizontalHeight: CGFloat = 330
         let verticalWidth: CGFloat = 380
+        let horizontalSize = settings.horizontalPanelSize
+        let verticalSize = settings.verticalPanelSize
         switch position {
         case .bottom:
+            let width = min(horizontalSize?.width ?? (frame.width - (margin + 4) * 2),
+                            frame.width - (margin + 4) * 2)
+            let height = min(horizontalSize?.height ?? horizontalHeight,
+                             frame.height - margin * 2)
             return NSRect(x: frame.minX + margin + 4,
                           y: frame.minY + margin,
-                          width: frame.width - (margin + 4) * 2,
-                          height: horizontalHeight)
+                          width: width,
+                          height: height)
         case .top:
+            let width = min(horizontalSize?.width ?? (frame.width - (margin + 4) * 2),
+                            frame.width - (margin + 4) * 2)
+            let height = min(horizontalSize?.height ?? horizontalHeight,
+                             frame.height - margin * 2)
             return NSRect(x: frame.minX + margin + 4,
-                          y: frame.maxY - margin - horizontalHeight,
-                          width: frame.width - (margin + 4) * 2,
-                          height: horizontalHeight)
+                          y: frame.maxY - margin - height,
+                          width: width,
+                          height: height)
         case .left:
+            let width = min(verticalSize?.width ?? verticalWidth,
+                            frame.width - margin * 2)
+            let height = min(verticalSize?.height ?? (frame.height - (margin + 4) * 2),
+                             frame.height - (margin + 4) * 2)
             return NSRect(x: frame.minX + margin,
                           y: frame.minY + margin + 4,
-                          width: verticalWidth,
-                          height: frame.height - (margin + 4) * 2)
+                          width: width,
+                          height: height)
         case .right:
-            return NSRect(x: frame.maxX - margin - verticalWidth,
+            let width = min(verticalSize?.width ?? verticalWidth,
+                            frame.width - margin * 2)
+            let height = min(verticalSize?.height ?? (frame.height - (margin + 4) * 2),
+                             frame.height - (margin + 4) * 2)
+            return NSRect(x: frame.maxX - margin - width,
                           y: frame.minY + margin + 4,
-                          width: verticalWidth,
-                          height: frame.height - (margin + 4) * 2)
+                          width: width,
+                          height: height)
         }
     }
 
@@ -852,13 +1054,10 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         panel.isMovableByWindowBackground = false
         panel.delegate = self
 
-        let background = NSVisualEffectView()
+        let background = RoundedPanelBackgroundView()
         background.material = .hudWindow
         background.blendingMode = .behindWindow
         background.state = .active
-        background.wantsLayer = true
-        background.layer?.cornerRadius = 16
-        background.layer?.masksToBounds = true
 
         let hosting = PanelHostingView(rootView: AppearanceRoot(settings: self.settings) {
             PanelView(viewModel: self.viewModel, position: self.settings.panelPosition)
@@ -873,8 +1072,40 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
             hosting.bottomAnchor.constraint(equalTo: background.bottomAnchor),
         ])
 
+        let resizeOverlay = PanelResizeOverlay(
+            positionProvider: { [weak self] in self?.settings.panelPosition ?? .bottom },
+            onResize: { [weak self] frame in self?.applyPanelResize(frame) },
+            onResizeEnd: { [weak self] _ in self?.persistPanelSize() }
+        )
+        resizeOverlay.translatesAutoresizingMaskIntoConstraints = false
+        background.addSubview(resizeOverlay)
+        NSLayoutConstraint.activate([
+            resizeOverlay.leadingAnchor.constraint(equalTo: background.leadingAnchor),
+            resizeOverlay.trailingAnchor.constraint(equalTo: background.trailingAnchor),
+            resizeOverlay.topAnchor.constraint(equalTo: background.topAnchor),
+            resizeOverlay.bottomAnchor.constraint(equalTo: background.bottomAnchor),
+        ])
+
         panel.contentView = background
         self.panel = panel
+    }
+
+    /// 拖拽过程中实时更新面板 frame（锚定对侧边缘，由 PanelResizeOverlay 计算）
+    private func applyPanelResize(_ frame: NSRect) {
+        guard let panel else { return }
+        panel.setFrame(frame, display: true)
+        viewModel.panelSize = panel.frame.size
+    }
+
+    /// 拖拽结束后把当前尺寸写入设置，下次呼出面板沿用
+    private func persistPanelSize() {
+        guard let panel else { return }
+        let size = panel.frame.size
+        if settings.panelPosition.isVertical {
+            settings.verticalPanelSize = size
+        } else {
+            settings.horizontalPanelSize = size
+        }
     }
 
     private func installKeyMonitor() {

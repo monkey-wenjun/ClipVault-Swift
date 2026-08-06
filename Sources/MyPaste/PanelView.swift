@@ -97,6 +97,20 @@ struct PanelView: View {
         }
     }
 
+    /// 卡片尺寸：随面板大小等比缩放（基准 260×236），只缩小不放大。
+    /// 横向布局由高度决定（面板高 330 → 卡片 236）；竖向布局由宽度决定（面板宽 380 → 卡片 260）。
+    private var cardSize: CGSize {
+        let size = viewModel.panelSize
+        guard size.width > 0, size.height > 0 else { return CGSize(width: 260, height: 236) }
+        let scale: CGFloat
+        if position.isVertical {
+            scale = min(1, max(0.5, (size.width - 54) / 326))
+        } else {
+            scale = min(1, max(0.5, (size.height - 68) / 262))
+        }
+        return CGSize(width: 260 * scale, height: 236 * scale)
+    }
+
     private var cardArea: some View {
         ZStack {
             ScrollViewReader { proxy in
@@ -372,6 +386,7 @@ struct PanelView: View {
                      onBrokenImage: { viewModel.handleBrokenImage(item) },
                      isEditingTitle: viewModel.editingCardTitleID == item.id,
                      editingTitle: $viewModel.editingCardTitle,
+                     cardSize: cardSize,
                      onBeginTitleEdit: { viewModel.beginCardTitleEdit(item) },
                      onCommitTitleEdit: { viewModel.commitCardTitleEdit() },
                      onCancelTitleEdit: { viewModel.cancelCardTitleEdit() })
@@ -816,6 +831,8 @@ struct CardView: View {
     var isEditingTitle: Bool = false
     /// 编辑中的标题文本（与 ViewModel 绑定）
     @Binding var editingTitle: String
+    /// 卡片尺寸（随面板大小缩放，默认 260×236）
+    var cardSize: CGSize = CGSize(width: 260, height: 236)
     /// 双击标题进入编辑模式
     var onBeginTitleEdit: (() -> Void)?
     /// 提交标题修改
@@ -916,7 +933,7 @@ struct CardView: View {
             .padding(12)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 260, height: 236)
+        .frame(width: cardSize.width, height: cardSize.height)
         .background(cardBackgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(

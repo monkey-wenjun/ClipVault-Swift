@@ -216,6 +216,8 @@ enum PasteTarget: String, CaseIterable, Identifiable {
 final class AppSettings: ObservableObject {
     private let defaults = UserDefaults.standard
 
+    static let maxHistoryItemsRange = 50...10000
+
     static let defaultShortcuts: [HotKeyAction: Shortcut] = [
         .showPanel: Shortcut(keyCode: UInt16(kVK_ANSI_V), modifiers: NSEvent.ModifierFlags([.command, .shift]).rawValue),
         .search: Shortcut(keyCode: UInt16(kVK_ANSI_F), modifiers: NSEvent.ModifierFlags([.command, .option]).rawValue),
@@ -235,6 +237,13 @@ final class AppSettings: ObservableObject {
     @Published var panelPosition: PanelPosition {
         didSet { defaults.set(panelPosition.rawValue, forKey: "panelPosition") }
     }
+    /// 主面板自定义尺寸（nil = 使用默认尺寸）。横向（底部/顶部）与竖向（左/右）布局各记一份。
+    @Published var horizontalPanelSize: CGSize? {
+        didSet { savePanelSize(horizontalPanelSize, key: "panelHorizontalSize") }
+    }
+    @Published var verticalPanelSize: CGSize? {
+        didSet { savePanelSize(verticalPanelSize, key: "panelVerticalSize") }
+    }
     @Published var language: AppLanguage {
         didSet {
             defaults.set(language.rawValue, forKey: "appLanguage")
@@ -243,6 +252,17 @@ final class AppSettings: ObservableObject {
     }
     @Published var retention: Retention {
         didSet { defaults.set(retention.rawValue, forKey: "retentionDays") }
+    }
+    /// 历史记录最大保存数量
+    @Published var maxHistoryItems: Int {
+        didSet {
+            let clamped = min(max(maxHistoryItems, AppSettings.maxHistoryItemsRange.lowerBound),
+                              AppSettings.maxHistoryItemsRange.upperBound)
+            if clamped != maxHistoryItems {
+                maxHistoryItems = clamped
+            }
+            defaults.set(maxHistoryItems, forKey: "maxHistoryItems")
+        }
     }
     @Published var pasteTarget: PasteTarget {
         didSet { defaults.set(pasteTarget.rawValue, forKey: "pasteTarget") }
@@ -309,6 +329,11 @@ final class AppSettings: ObservableObject {
         runInBackground = defaults.object(forKey: "runInBackground") as? Bool ?? true
         appearance = AppAppearance(rawValue: defaults.string(forKey: "appAppearance") ?? "") ?? .system
         panelPosition = PanelPosition(rawValue: defaults.string(forKey: "panelPosition") ?? "") ?? .bottom
+        let storedMax = defaults.object(forKey: "maxHistoryItems") as? Int ?? 500
+        maxHistoryItems = min(max(storedMax, AppSettings.maxHistoryItemsRange.lowerBound),
+                              AppSettings.maxHistoryItemsRange.upperBound)
+        horizontalPanelSize = Self.loadPanelSize(key: "panelHorizontalSize")
+        verticalPanelSize = Self.loadPanelSize(key: "panelVerticalSize")
         language = AppLanguage(rawValue: defaults.string(forKey: "appLanguage") ?? "") ?? .system
         retention = Retention(rawValue: defaults.integer(forKey: "retentionDays")) ?? .forever
         pasteTarget = PasteTarget(rawValue: defaults.string(forKey: "pasteTarget") ?? "") ?? .activeApp
@@ -347,6 +372,24 @@ final class AppSettings: ObservableObject {
             }
         }
         shortcuts = loaded
+    }
+
+    private static func loadPanelSize(key: String) -> CGSize? {
+        let defaults = UserDefaults.standard
+        let width = defaults.double(forKey: key + ".width")
+        let height = defaults.double(forKey: key + ".height")
+        guard width > 0, height > 0 else { return nil }
+        return CGSize(width: width, height: height)
+    }
+
+    private func savePanelSize(_ size: CGSize?, key: String) {
+        if let size {
+            defaults.set(size.width, forKey: key + ".width")
+            defaults.set(size.height, forKey: key + ".height")
+        } else {
+            defaults.removeObject(forKey: key + ".width")
+            defaults.removeObject(forKey: key + ".height")
+        }
     }
 
     func shortcut(for action: HotKeyAction) -> Shortcut? {

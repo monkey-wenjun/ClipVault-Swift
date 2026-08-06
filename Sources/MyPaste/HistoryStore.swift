@@ -5,7 +5,8 @@ final class HistoryStore: ObservableObject {
     @Published private(set) var items: [ClipboardItem] = []
     @Published private(set) var pinboards: [Pinboard] = []
 
-    private let maxItems = 500
+    /// 历史记录保留上限（默认 500，可在设置中调整）
+    var maxItems: Int = 500
     private let baseDir: URL
     private let imagesDir: URL
     private var historyFile: URL { baseDir.appendingPathComponent("history.json") }
@@ -153,6 +154,19 @@ final class HistoryStore: ObservableObject {
         expired.forEach(deleteImageFile)
         items.removeAll { $0.createdAt < cutoff }
         save()
+    }
+
+    /// 更新历史保留上限并立即裁剪超出部分
+    func setMaxItems(_ count: Int) {
+        let clamped = min(max(count, AppSettings.maxHistoryItemsRange.lowerBound),
+                          AppSettings.maxHistoryItemsRange.upperBound)
+        maxItems = clamped
+        if items.count > maxItems {
+            let removed = items[maxItems...]
+            removed.forEach(deleteImageFile)
+            items = Array(items.prefix(maxItems))
+            save()
+        }
     }
 
     // MARK: - 集合

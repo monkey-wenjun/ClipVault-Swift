@@ -275,6 +275,33 @@ private struct GeneralTab: View {
                     if retention != Retention.allCases.last { Spacer() }
                 }
             }
+            Divider()
+            HStack {
+                Text("最大保存数量")
+                Spacer()
+                TextField(
+                    "",
+                    value: Binding(
+                        get: { Double(settings.maxHistoryItems) },
+                        set: { settings.maxHistoryItems = Int($0) }
+                    ),
+                    format: .number
+                )
+                .frame(width: 80)
+                .multilineTextAlignment(.trailing)
+                Stepper(
+                    "",
+                    value: Binding(
+                        get: { Double(settings.maxHistoryItems) },
+                        set: { settings.maxHistoryItems = Int($0) }
+                    ),
+                    in: Double(AppSettings.maxHistoryItemsRange.lowerBound) ... Double(AppSettings.maxHistoryItemsRange.upperBound),
+                    step: 50
+                )
+            }
+            Text("超过该数量后，最早的历史记录会被自动删除。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             HStack {
                 Spacer()
                 Button("删除历史…") {

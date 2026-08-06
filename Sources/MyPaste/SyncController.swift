@@ -108,7 +108,7 @@ final class SyncController: ObservableObject {
                 merged.append(item)
             }
         }
-        return Array(merged.prefix(500))
+        return Array(merged.prefix(settings.maxHistoryItems))
     }
 
     private func mergePinboards(local: [Pinboard], remote: [Pinboard]) -> [Pinboard] {

@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         applyRunInBackground()
 
         store = HistoryStore()
+        store.setMaxItems(settings.maxHistoryItems)
         if let tagConfig = CloseTicketTagger.loadConfig() {
             store.syncAttributionPinboard(with: tagConfig)
         }
@@ -195,6 +196,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         settings.$runInBackground
             .dropFirst()
             .sink { [weak self] _ in self?.applyRunInBackground() }
+            .store(in: &cancellables)
+        settings.$maxHistoryItems
+            .dropFirst()
+            .sink { [weak self] count in self?.store.setMaxItems(count) }
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: .appLanguageDidChange)
             .sink { [weak self] _ in
