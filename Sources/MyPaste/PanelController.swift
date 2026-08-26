@@ -124,20 +124,23 @@ final class PanelViewModel: ObservableObject {
         searchScope != .all || typeFilter != nil || appFilter != nil
     }
 
-    /// 历史与所有集合中出现过的来源应用（首次出现顺序）
-    var availableApps: [(bundleID: String, name: String)] {
+    /// 历史与所有集合中出现过的来源应用（首次出现顺序）- 缓存，数据变化时更新
+    @Published private(set) var availableApps: [(bundleID: String, name: String)] = []
+
+    private static func appName(for bundleID: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return bundleID }
+        return url.deletingPathExtension().lastPathComponent
+    }
+
+    /// 刷新可用应用列表缓存（在数据变化时调用）
+    private func refreshAvailableApps() {
         var seen = Set<String>()
         var apps: [(String, String)] = []
         for item in store.items + store.pinboards.flatMap(\.items) {
             guard let bundleID = item.sourceBundleID, seen.insert(bundleID).inserted else { continue }
             apps.append((bundleID, Self.appName(for: bundleID)))
         }
-        return apps
-    }
-
-    private static func appName(for bundleID: String) -> String {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return bundleID }
-        return url.deletingPathExtension().lastPathComponent
+        availableApps = apps
     }
 
     /// 内联重命名标签状态
@@ -175,16 +178,22 @@ final class PanelViewModel: ObservableObject {
     /// 分批加载窗口：先渲染前 N 条，滚动到底再追加
     @Published private(set) var visibleCount = 30
 
+    private let filterQueue = DispatchQueue(label: "com.clipvault.filter", qos: .userInitiated)
+
     init(store: HistoryStore) {
         self.store = store
-        // 恢复上次选择的搜索范围（指向的标签已删除时按空结果处理，不崩溃）
         if let saved = UserDefaults.standard.string(forKey: "searchScope"),
            let scope = SearchScope(persisted: saved) {
             searchScope = scope
         }
         store.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
+            DispatchQueue.main.async { [weak self] in
+                self?.refreshAvailableApps()
+            }
         }.store(in: &cancellables)
+        // 初始化时刷新一次
+        refreshAvailableApps()
         // 搜索词去抖 150ms：连续打字不触发中间计算；清空时立即生效
         let debouncedSearch = $search
             .map { query -> AnyPublisher<String, Never> in
@@ -200,6 +209,7 @@ final class PanelViewModel: ObservableObject {
         Publishers.CombineLatest4(debouncedSearch, $selectedTab, $selectedHistoryTab, store.$items)
             .combineLatest(filters)
             .combineLatest(store.$pinboards)
+            .receive(on: filterQueue)
             .map { combined, pinboards in
                 let (input, filter) = combined
                 let (search, tab, historyTabSelected, items) = input
@@ -208,10 +218,11 @@ final class PanelViewModel: ObservableObject {
                                             type: type, app: app,
                                             items: items, pinboards: pinboards)
             }
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] filtered, tagMap in
                 self?.filtered = filtered
                 self?.searchTagMap = tagMap
-                self?.visibleCount = 30
+                self?.visibleCount = min(30, filtered.count)
             }
             .store(in: &cancellables)
     }
@@ -223,7 +234,7 @@ final class PanelViewModel: ObservableObject {
         visibleCount = min(visibleCount + 30, filtered.count)
     }
 
-    private static func computeFiltered(search: String, tab: UUID?, historyTabSelected: Bool, scope: SearchScope,
+    nonisolated private static func computeFiltered(search: String, tab: UUID?, historyTabSelected: Bool, scope: SearchScope,
                                         type: ContentType?, app: String?,
                                         items: [ClipboardItem],
                                         pinboards: [Pinboard]) -> ([ClipboardItem], [UUID: Pinboard]) {
@@ -273,7 +284,7 @@ final class PanelViewModel: ObservableObject {
         return (result, tagMap)
     }
 
-    private static func matchesType(_ item: ClipboardItem, _ type: ContentType) -> Bool {
+    nonisolated private static func matchesType(_ item: ClipboardItem, _ type: ContentType) -> Bool {
         switch type {
         case .text: return item.kind == .text && !isLink(item)
         case .link: return item.kind == .text && isLink(item)
@@ -283,7 +294,7 @@ final class PanelViewModel: ObservableObject {
         }
     }
 
-    private static func isLink(_ item: ClipboardItem) -> Bool {
+    nonisolated private static func isLink(_ item: ClipboardItem) -> Bool {
         let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return text.hasPrefix("http://") || text.hasPrefix("https://")
     }
@@ -292,14 +303,30 @@ final class PanelViewModel: ObservableObject {
         store.imageURL(for: item)
     }
 
-    /// 卡片图片：解密 + 内存缓存
+    /// 卡片图片：解密 + 内存缓存，异步预解码
     func cardImage(for item: ClipboardItem) -> NSImage? {
-        guard item.kind == .image else { return nil }
+        guard item.kind == .image, let fileName = item.imageFile else { return nil }
         if let cached = CardImageCache.image(forID: item.id) { return cached }
-        guard let data = store.imageData(for: item),
-              let image = NSImage(data: data) else { return nil }
-        CardImageCache.set(image, forID: item.id)
-        return image
+        // 触发异步预加载
+        let imagesDir = store.imagesDirectory
+        CardImageCache.preload(id: item.id) {
+            HistoryStore.loadImageData(fileName: fileName, imagesDir: imagesDir)
+        }
+        return nil
+    }
+
+    /// 预加载指定范围的图片
+    func preloadImages(in range: Range<Int>) {
+        let items = Array(filtered.prefix(visibleCount))
+        let imagesDir = store.imagesDirectory
+        for index in range where items.indices.contains(index) {
+            let item = items[index]
+            guard item.kind == .image, let fileName = item.imageFile,
+                  CardImageCache.image(forID: item.id) == nil else { continue }
+            CardImageCache.preload(id: item.id) {
+                HistoryStore.loadImageData(fileName: fileName, imagesDir: imagesDir)
+            }
+        }
     }
 
     /// 用于拖拽到 Finder/其他目录的文件 URL
@@ -309,12 +336,13 @@ final class PanelViewModel: ObservableObject {
             guard let path = item.text else { return nil }
             return URL(fileURLWithPath: path)
         case .image:
-            guard let data = store.imageData(for: item),
-                  let fileName = item.imageFile else { return nil }
+            guard let fileName = item.imageFile,
+                  let data = HistoryStore.loadImageData(fileName: fileName, imagesDir: store.imagesDirectory),
+                  let fileNameForDrag = item.imageFile else { return nil }
             let tempDir = FileManager.default.temporaryDirectory
                 .appendingPathComponent("ClipVaultDrag", isDirectory: true)
             try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-            let tempFile = tempDir.appendingPathComponent(fileName)
+            let tempFile = tempDir.appendingPathComponent(fileNameForDrag)
             try? data.write(to: tempFile, options: .atomic)
             return tempFile
         default:
@@ -856,6 +884,10 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
             self?.toggleFilterPopover()
         }
         observeSettings()
+        // 预创建面板，避免第一次显示时延迟
+        DispatchQueue.main.async { [weak self] in
+            self?.makePanel()
+        }
     }
 
     private func observeSettings() {

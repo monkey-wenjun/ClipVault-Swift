@@ -185,9 +185,11 @@ enum IconColorCache {
     }
 }
 
-/// 图片缓存（按条目 id）：解密后的 NSImage 常驻内存，避免每次渲染都解密
+/// 图片缓存（按条目 id）：解密后的 NSImage 常驻内存，异步预解码避免主线程卡顿
 enum CardImageCache {
     private static let cache = NSCache<NSString, NSImage>()
+    private static let decodeQueue = DispatchQueue(label: "com.clipvault.imagedecode", qos: .userInitiated)
+    private static var pendingRequests = Set<UUID>()
 
     static func image(forID id: UUID) -> NSImage? {
         cache.object(forKey: id.uuidString as NSString)
@@ -196,6 +198,50 @@ enum CardImageCache {
     static func set(_ image: NSImage, forID id: UUID) {
         cache.setObject(image, forKey: id.uuidString as NSString)
     }
+
+    /// 异步预加载并解码图片，完成后自动缓存
+    static func preload(id: UUID, dataLoader: @escaping () -> Data?) {
+        let idString = id.uuidString
+        guard cache.object(forKey: idString as NSString) == nil, !pendingRequests.contains(id) else { return }
+        pendingRequests.insert(id)
+        decodeQueue.async {
+            guard let data = dataLoader(),
+                  let image = NSImage(data: data) else {
+                Task { @MainActor in pendingRequests.remove(id) }
+                return
+            }
+            let size = image.size
+            if size.width > 0, size.height > 0 {
+                let rep = NSBitmapImageRep(
+                    bitmapDataPlanes: nil,
+                    pixelsWide: Int(size.width * 2),
+                    pixelsHigh: Int(size.height * 2),
+                    bitsPerSample: 8,
+                    samplesPerPixel: 4,
+                    hasAlpha: true,
+                    isPlanar: false,
+                    colorSpaceName: .deviceRGB,
+                    bytesPerRow: 0,
+                    bitsPerPixel: 0
+                )
+                if let rep {
+                    NSGraphicsContext.saveGraphicsState()
+                    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+                    image.draw(in: NSRect(origin: .zero, size: NSSize(width: size.width * 2, height: size.height * 2)))
+                    NSGraphicsContext.restoreGraphicsState()
+                }
+            }
+            Task { @MainActor in
+                pendingRequests.remove(id)
+                cache.setObject(image, forKey: idString as NSString)
+                NotificationCenter.default.post(name: .cardImageDidLoad, object: id)
+            }
+        }
+    }
+}
+
+extension Notification.Name {
+    static let cardImageDidLoad = Notification.Name("cardImageDidLoad")
 }
 
 /// 搜索用小写文本缓存：把带 locale 的 localizedCaseInsensitiveContains

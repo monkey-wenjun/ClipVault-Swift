@@ -15,21 +15,39 @@ final class HistoryStore: ObservableObject {
     /// 每次本地保存后回调（同步引擎借此把变更写到同步目录）
     var onSaved: (() -> Void)?
 
+    /// 保存防抖：合并短时间内的多次写入
+    private var saveWorkItem: DispatchWorkItem?
+    private let saveQueue = DispatchQueue(label: "com.clipvault.save", qos: .utility)
+
+    /// 图片文件哈希缓存：避免重复读取图片数据做去重比较
+    private var imageHashCache: [String: Data] = [:]
+
     init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         baseDir = appSupport.appendingPathComponent("ClipVault", isDirectory: true)
         imagesDir = baseDir.appendingPathComponent("images", isDirectory: true)
         try? FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
-        // 数据目录仅当前用户可访问
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: baseDir.path)
         load()
+        // 损坏条目清理移到后台，不阻塞启动
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let brokenIDs = self.findBrokenItemIDs()
+            if !brokenIDs.isEmpty {
+                Task { @MainActor in
+                    self.removeBrokenItems(ids: brokenIDs)
+                }
+            }
+        }
     }
 
     // MARK: - 历史
 
     @discardableResult
     func addText(_ text: String, sourceBundleID: String?) -> ClipboardItem {
-        if let dup = items.firstIndex(where: { $0.kind != .image && $0.text == text }) {
+        // 去重：只检查最近 100 条，重复复制几乎都发生在短时间内
+        let checkLimit = min(100, items.count)
+        if let dup = items.prefix(checkLimit).firstIndex(where: { $0.kind != .image && $0.text == text }) {
             items.remove(at: dup)
         }
         let kind: ClipboardItem.Kind = Self.isHexColor(text) ? .color : .text
@@ -37,7 +55,7 @@ final class HistoryStore: ObservableObject {
                                  fileSize: nil, createdAt: Date(), sourceBundleID: sourceBundleID)
         items.insert(item, at: 0)
         trim()
-        save()
+        scheduleSave()
         return item
     }
 
@@ -45,7 +63,7 @@ final class HistoryStore: ObservableObject {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         items[index].kind = Self.isHexColor(text) ? .color : .text
         items[index].text = text
-        save()
+        scheduleSave()
     }
 
     func updatePinboardText(pinboardID: UUID, itemID: UUID, text: String) {
@@ -53,7 +71,7 @@ final class HistoryStore: ObservableObject {
               let itemIndex = pinboards[boardIndex].items.firstIndex(where: { $0.id == itemID }) else { return }
         pinboards[boardIndex].items[itemIndex].kind = Self.isHexColor(text) ? .color : .text
         pinboards[boardIndex].items[itemIndex].text = text
-        save()
+        scheduleSave()
     }
 
     /// 为指定条目设置自定义标题；传 nil 或空字符串则恢复默认标题
@@ -68,18 +86,29 @@ final class HistoryStore: ObservableObject {
                 pinboards[boardIndex].items[itemIndex].customTitle = storedTitle
             }
         }
-        save()
+        scheduleSave()
     }
 
     @discardableResult
     func addImage(_ pngData: Data, sourceBundleID: String?) -> ClipboardItem? {
-        // 去重：历史里已有相同图片数据时，只更新时间和来源，不新增条目
-        if let dupIndex = items.firstIndex(where: { $0.kind == .image && imageData(for: $0) == pngData }) {
+        // 图片去重优化：计算新数据的前缀哈希，只比较最近 50 条图片（解密比较成本太高）
+        let newHash = pngData.prefix(4096).withUnsafeBytes { Data($0) }
+        let checkLimit = min(50, items.count)
+        if let dupIndex = items.prefix(checkLimit).firstIndex(where: { item -> Bool in
+            guard item.kind == .image, let file = item.imageFile else { return false }
+            if let cachedHash = imageHashCache[file] {
+                return cachedHash == newHash
+            }
+            guard let decrypted = Self.loadImageData(fileName: file, imagesDir: imagesDir) else { return false }
+            let prefixHash = decrypted.prefix(4096).withUnsafeBytes { Data($0) }
+            imageHashCache[file] = prefixHash
+            return prefixHash == newHash
+        }) {
             items[dupIndex].createdAt = Date()
             items[dupIndex].sourceBundleID = sourceBundleID
             let dup = items.remove(at: dupIndex)
             items.insert(dup, at: 0)
-            save()
+            scheduleSave()
             return dup
         }
         guard let encrypted = CryptoService.encrypt(pngData) else { return nil }
@@ -89,11 +118,12 @@ final class HistoryStore: ObservableObject {
         } catch {
             return nil
         }
+        imageHashCache[fileName] = newHash
         let item = ClipboardItem(id: UUID(), kind: .image, text: nil, imageFile: fileName,
                                  fileSize: nil, createdAt: Date(), sourceBundleID: sourceBundleID)
         items.insert(item, at: 0)
         trim()
-        save()
+        scheduleSave()
         return item
     }
 
@@ -109,7 +139,9 @@ final class HistoryStore: ObservableObject {
     /// 拖拽文件到面板时创建文件引用条目
     @discardableResult
     func addFile(path: String, sourceBundleID: String?) -> ClipboardItem {
-        if let dup = items.firstIndex(where: { $0.kind == .file && $0.text == path }) {
+        // 文件去重：只检查最近 100 条
+        let checkLimit = min(100, items.count)
+        if let dup = items.prefix(checkLimit).firstIndex(where: { $0.kind == .file && $0.text == path }) {
             items.remove(at: dup)
         }
         let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
@@ -118,14 +150,15 @@ final class HistoryStore: ObservableObject {
                                  createdAt: Date(), sourceBundleID: sourceBundleID)
         items.insert(item, at: 0)
         trim()
-        save()
+        scheduleSave()
         return item
     }
 
     func remove(_ item: ClipboardItem) {
         items.removeAll { $0.id == item.id }
         deleteImageFile(of: item)
-        save()
+        if let file = item.imageFile { imageHashCache.removeValue(forKey: file) }
+        scheduleSave()
     }
 
     /// 从历史和所有集合中移除指定条目（用于清理损坏图片）
@@ -140,6 +173,7 @@ final class HistoryStore: ObservableObject {
 
     func clear() {
         items.removeAll()
+        imageHashCache.removeAll()
         try? FileManager.default.removeItem(at: imagesDir)
         try? FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
         save()
@@ -151,9 +185,12 @@ final class HistoryStore: ObservableObject {
         let cutoff = Date().addingTimeInterval(-Double(days) * 86400)
         let expired = items.filter { $0.createdAt < cutoff }
         guard !expired.isEmpty else { return }
-        expired.forEach(deleteImageFile)
+        expired.forEach { item in
+            deleteImageFile(of: item)
+            if let file = item.imageFile { imageHashCache.removeValue(forKey: file) }
+        }
         items.removeAll { $0.createdAt < cutoff }
-        save()
+        scheduleSave()
     }
 
     /// 更新历史保留上限并立即裁剪超出部分
@@ -163,9 +200,12 @@ final class HistoryStore: ObservableObject {
         maxItems = clamped
         if items.count > maxItems {
             let removed = items[maxItems...]
-            removed.forEach(deleteImageFile)
+            removed.forEach { item in
+                deleteImageFile(of: item)
+                if let file = item.imageFile { imageHashCache.removeValue(forKey: file) }
+            }
             items = Array(items.prefix(maxItems))
-            save()
+            scheduleSave()
         }
     }
 
@@ -175,25 +215,25 @@ final class HistoryStore: ObservableObject {
     func addPinboard(name: String) -> Pinboard {
         let pinboard = Pinboard(name: name)
         pinboards.append(pinboard)
-        save()
+        scheduleSave()
         return pinboard
     }
 
     func renamePinboard(_ id: UUID, to name: String) {
         guard let index = pinboards.firstIndex(where: { $0.id == id }) else { return }
         pinboards[index].name = name
-        save()
+        scheduleSave()
     }
 
     func setPinboardColor(_ id: UUID, colorHex: String?) {
         guard let index = pinboards.firstIndex(where: { $0.id == id }) else { return }
         pinboards[index].colorHex = colorHex
-        save()
+        scheduleSave()
     }
 
     func removePinboard(_ id: UUID) {
         pinboards.removeAll { $0.id == id }
-        save()
+        scheduleSave()
     }
 
     /// 根据 CloseTicketTagger 配置同步「归因类型」集合。
@@ -218,7 +258,7 @@ final class HistoryStore: ObservableObject {
             pinboard.items = tagItems
             pinboards.append(pinboard)
         }
-        save()
+        scheduleSave()
     }
 
     /// 拖拽排序：把 draggedID 移动到 targetID 的位置
@@ -228,25 +268,32 @@ final class HistoryStore: ObservableObject {
               from != to else { return }
         let board = pinboards.remove(at: from)
         pinboards.insert(board, at: to)
-        save()
+        scheduleSave()
     }
 
     func addToPinboard(_ item: ClipboardItem, pinboardID: UUID) {
         guard let index = pinboards.firstIndex(where: { $0.id == pinboardID }) else { return }
-        // 去重：相同内容在集合内只保留一份
-        if pinboards[index].items.contains(where: { isContentEqual($0, item) }) {
-            return
+        // 集合内去重：文本/文件直接比较，图片比较文件名（因为复制到集合后会生成新文件）
+        let isDuplicate: Bool
+        switch item.kind {
+        case .text, .color, .file:
+            isDuplicate = pinboards[index].items.contains { $0.text == item.text && $0.kind == item.kind }
+        case .image:
+            isDuplicate = pinboards[index].items.contains { $0.id == item.id }
         }
+        if isDuplicate { return }
         // 图片条目钉入集合时复制一份图片文件，避免历史清理把集合里的图删掉
         var pinned = item
-        if item.kind == .image, let data = imageData(for: item),
+        if item.kind == .image, let fileName = item.imageFile,
+           let data = Self.loadImageData(fileName: fileName, imagesDir: imagesDir),
            let encrypted = CryptoService.encrypt(data) {
-            let fileName = UUID().uuidString + ".png"
-            if let _ = try? encrypted.write(to: imagesDir.appendingPathComponent(fileName), options: .atomic) {
+            let newFileName = UUID().uuidString + ".png"
+            if let _ = try? encrypted.write(to: imagesDir.appendingPathComponent(newFileName), options: .atomic) {
                 pinned = ClipboardItem(id: item.id, kind: item.kind, text: item.text,
-                                       imageFile: fileName, fileSize: item.fileSize,
+                                       imageFile: newFileName, fileSize: item.fileSize,
                                        createdAt: item.createdAt,
                                        sourceBundleID: item.sourceBundleID)
+                imageHashCache[newFileName] = data.prefix(4096).withUnsafeBytes { Data($0) }
             }
         }
         pinboards[index].items.removeAll { $0.id == pinned.id }
@@ -255,34 +302,21 @@ final class HistoryStore: ObservableObject {
         if let historyIndex = items.firstIndex(where: { $0.id == item.id }) {
             if items[historyIndex].imageFile != pinned.imageFile {
                 deleteImageFile(of: items[historyIndex])
+                if let file = items[historyIndex].imageFile { imageHashCache.removeValue(forKey: file) }
             }
             items.remove(at: historyIndex)
         }
-        save()
-    }
-
-    /// 判断两条剪贴板条目内容是否相同（用于集合内去重）
-    private func isContentEqual(_ lhs: ClipboardItem, _ rhs: ClipboardItem) -> Bool {
-        guard lhs.kind == rhs.kind else { return false }
-        switch lhs.kind {
-        case .text, .color:
-            return lhs.text == rhs.text
-        case .file:
-            return lhs.text == rhs.text
-        case .image:
-            guard let lhsData = imageData(for: lhs),
-                  let rhsData = imageData(for: rhs) else { return false }
-            return lhsData == rhsData
-        }
+        scheduleSave()
     }
 
     func removeFromPinboard(_ itemID: UUID, pinboardID: UUID) {
         guard let index = pinboards.firstIndex(where: { $0.id == pinboardID }) else { return }
         if let item = pinboards[index].items.first(where: { $0.id == itemID }) {
             deleteImageFile(of: item)
+            if let file = item.imageFile { imageHashCache.removeValue(forKey: file) }
         }
         pinboards[index].items.removeAll { $0.id == itemID }
-        save()
+        scheduleSave()
     }
 
     func pinboard(_ id: UUID) -> Pinboard? {
@@ -295,6 +329,7 @@ final class HistoryStore: ObservableObject {
     func replaceAll(items newItems: [ClipboardItem], pinboards newPinboards: [Pinboard]) {
         items = newItems
         pinboards = newPinboards
+        imageHashCache.removeAll()
         save()
     }
 
@@ -306,9 +341,13 @@ final class HistoryStore: ObservableObject {
     }
 
     func imageData(for item: ClipboardItem) -> Data? {
-        guard let url = imageURL(for: item),
-              let raw = try? Data(contentsOf: url) else { return nil }
-        // 加密存储；解密失败时按明文处理（迁移前的旧文件）
+        guard let file = item.imageFile else { return nil }
+        return Self.loadImageData(fileName: file, imagesDir: imagesDir)
+    }
+
+    nonisolated static func loadImageData(fileName: String, imagesDir: URL) -> Data? {
+        let url = imagesDir.appendingPathComponent(fileName)
+        guard let raw = try? Data(contentsOf: url, options: [.mappedIfSafe]) else { return nil }
         return CryptoService.decrypt(raw) ?? raw
     }
 
@@ -337,16 +376,28 @@ final class HistoryStore: ObservableObject {
     }
 
     private func save() {
-        if let data = try? JSONEncoder().encode(items) {
-            writeEncrypted(data, to: historyFile)
+        let itemsSnapshot = items
+        let pinboardsSnapshot = pinboards
+        let historyFile = self.historyFile
+        let pinboardsFile = self.pinboardsFile
+        let baseDir = self.baseDir
+        let onSaved = self.onSaved
+        saveQueue.async {
+            if let data = try? JSONEncoder().encode(itemsSnapshot) {
+                Self.writeEncrypted(data, to: historyFile, baseDir: baseDir)
+            }
+            if let data = try? JSONEncoder().encode(pinboardsSnapshot) {
+                Self.writeEncrypted(data, to: pinboardsFile, baseDir: baseDir)
+            }
+            if let onSaved {
+                Task { @MainActor in
+                    onSaved()
+                }
+            }
         }
-        if let data = try? JSONEncoder().encode(pinboards) {
-            writeEncrypted(data, to: pinboardsFile)
-        }
-        onSaved?()
     }
 
-    private func writeEncrypted(_ data: Data, to url: URL) {
+    nonisolated private static func writeEncrypted(_ data: Data, to url: URL, baseDir: URL) {
         guard let encrypted = CryptoService.encrypt(data) else { return }
         try? encrypted.write(to: url, options: .atomic)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
@@ -373,33 +424,76 @@ final class HistoryStore: ObservableObject {
             pinboards = decoded
             if !file.wasEncrypted { needsResave = true }
         }
-        // 迁移：检测到明文旧数据，立刻以加密形式重写
         if needsResave { save() }
-        pruneBrokenItems()
     }
 
-    /// 清理图片/文件已丢失的条目（不再展示"图片不可用"或失效文件）
-    private func pruneBrokenItems() {
+    /// 防抖保存：400ms 内的多次修改合并为一次写入，在后台队列执行 IO
+    private func scheduleSave() {
+        saveWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.save()
+        }
+        saveWorkItem = workItem
+        saveQueue.asyncAfter(deadline: .now() + 0.4, execute: workItem)
+    }
+
+    /// 后台线程查找损坏条目（图片/文件不存在），返回 ID 集合
+    nonisolated private func findBrokenItemIDs() -> Set<UUID> {
         let fm = FileManager.default
-        func isBroken(_ item: ClipboardItem) -> Bool {
+        let baseDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ClipVault", isDirectory: true)
+        let imagesDir = baseDir.appendingPathComponent("images", isDirectory: true)
+        var brokenIDs = Set<UUID>()
+
+        func check(_ item: ClipboardItem) {
             switch item.kind {
             case .image:
-                guard let file = item.imageFile else { return true }
-                return !fm.fileExists(atPath: imagesDir.appendingPathComponent(file).path)
+                guard let file = item.imageFile else {
+                    brokenIDs.insert(item.id)
+                    return
+                }
+                if !fm.fileExists(atPath: imagesDir.appendingPathComponent(file).path) {
+                    brokenIDs.insert(item.id)
+                }
             case .file:
-                guard let path = item.text else { return true }
-                return !fm.fileExists(atPath: path)
+                guard let path = item.text else {
+                    brokenIDs.insert(item.id)
+                    return
+                }
+                if !fm.fileExists(atPath: path) {
+                    brokenIDs.insert(item.id)
+                }
             default:
-                return false
+                break
             }
         }
-        let before = items.count + pinboards.flatMap(\.items).count
-        items.removeAll(where: isBroken)
+
+        if let historyData = try? Data(contentsOf: baseDir.appendingPathComponent("history.json")),
+           let decrypted = CryptoService.decrypt(historyData) ?? historyData as Data?,
+           let items = try? JSONDecoder().decode([ClipboardItem].self, from: decrypted) {
+            items.forEach(check)
+        }
+        if let pinboardsData = try? Data(contentsOf: baseDir.appendingPathComponent("pinboards.json")),
+           let decrypted = CryptoService.decrypt(pinboardsData) ?? pinboardsData as Data?,
+           let pinboards = try? JSONDecoder().decode([Pinboard].self, from: decrypted) {
+            pinboards.flatMap(\.items).forEach(check)
+        }
+        return brokenIDs
+    }
+
+    /// 主线程删除损坏条目
+    private func removeBrokenItems(ids: Set<UUID>) {
+        items.removeAll { ids.contains($0.id) }
         for index in pinboards.indices {
-            pinboards[index].items.removeAll(where: isBroken)
+            pinboards[index].items.removeAll { ids.contains($0.id) }
         }
-        if before != items.count + pinboards.flatMap(\.items).count {
-            save()
+        ids.forEach { id in
+            if let item = items.first(where: { $0.id == id }),
+               let file = item.imageFile {
+                imageHashCache.removeValue(forKey: file)
+            }
         }
+        scheduleSave()
     }
 }

@@ -813,6 +813,7 @@ private struct TabDropDelegate: DropDelegate {
 
 struct CardView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @State private var loadedImage: NSImage?
 
     let item: ClipboardItem
     let number: Int?
@@ -865,6 +866,11 @@ struct CardView: View {
 
     private var hoverBorderColor: Color {
         colorScheme == .dark ? Color.white.opacity(0.25) : Color.black.opacity(0.12)
+    }
+
+    /// 当前显示的图片：优先使用外部传入的，否则使用异步加载缓存的
+    private var displayImage: NSImage? {
+        image ?? loadedImage
     }
 
     var body: some View {
@@ -947,6 +953,15 @@ struct CardView: View {
         .shadow(color: .black.opacity(hovering ? 0.4 : 0), radius: 6, y: 3)
         .animation(.easeInOut(duration: 0.12), value: hovering)
         .onHover { hovering = $0 }
+        .onAppear {
+            if item.kind == .image, let cached = CardImageCache.image(forID: item.id) {
+                loadedImage = cached
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cardImageDidLoad)) { notification in
+            guard let loadedID = notification.object as? UUID, loadedID == item.id else { return }
+            loadedImage = CardImageCache.image(forID: item.id)
+        }
         .onChange(of: isEditingTitle) { editing in
             if editing {
                 DispatchQueue.main.async { titleFocused = true }
@@ -980,14 +995,21 @@ struct CardView: View {
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .image:
-            if let image {
-                Image(nsImage: image)
+            if let displayImage {
+                Image(nsImage: displayImage)
                     .resizable()
                     .scaledToFit()
             } else {
-                // 图片不可用：不展示占位，回调触发自动删除该条目
+                // 图片不可用或正在加载：先显示占位，加载失败回调触发自动删除
                 Color.clear
-                    .onAppear { onBrokenImage?() }
+                    .onAppear {
+                        // 如果 2 秒后还没加载出来，可能是文件损坏，触发检查
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                            if CardImageCache.image(forID: item.id) == nil {
+                                onBrokenImage?()
+                            }
+                        }
+                    }
             }
         case .file:
             VStack(spacing: 10) {
