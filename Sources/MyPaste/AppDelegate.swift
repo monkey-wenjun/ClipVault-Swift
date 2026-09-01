@@ -56,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             guard let self else { return false }
             return self.jsonViewer.isVisible || self.textPreview.isVisible || self.imagePreview.isVisible
         }
+        // 面板显示前先让监听器抓一次剪贴板，保证展示最新内容（配合事件驱动/更短轮询）
+        panelController.onWillShow = { [weak self] in
+            self?.monitor.checkNow()
+        }
         panelController.shouldSuppressKeyHandling = { [weak self] in
             guard let self else { return false }
             return self.jsonViewer.isVisible || self.textPreview.isVisible || self.imagePreview.isVisible || self.textEditor.isVisible || self.settingsWindow.isVisible

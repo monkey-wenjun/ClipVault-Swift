@@ -127,20 +127,41 @@ final class PanelViewModel: ObservableObject {
     /// 历史与所有集合中出现过的来源应用（首次出现顺序）- 缓存，数据变化时更新
     @Published private(set) var availableApps: [(bundleID: String, name: String)] = []
 
+    /// 上次计算出的来源 bundleID 集合：数据变化时若集合未变则跳过重建（避免全量重算）
+    private var lastAppBundleIDs: Set<String> = []
+    /// bundleID → 应用显示名缓存：NSWorkspace 查询较慢，缓存后避免每次刷新重复解析
+    private static var appNameCache: [String: String] = [:]
+
     private static func appName(for bundleID: String) -> String {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return bundleID }
-        return url.deletingPathExtension().lastPathComponent
+        if let cached = appNameCache[bundleID] { return cached }
+        let name: String
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            name = url.deletingPathExtension().lastPathComponent
+        } else {
+            name = bundleID
+        }
+        appNameCache[bundleID] = name
+        return name
     }
 
-    /// 刷新可用应用列表缓存（在数据变化时调用）
+    /// 刷新可用应用列表缓存（在数据变化时调用）。
+    /// 先扫描出来源 bundleID 集合，若与上次相同则直接返回；只有集合变化时才重建带名称的列表，
+    /// 名称解析走缓存，避免每次数据变更都做全量 NSWorkspace 查询。
     private func refreshAvailableApps() {
         var seen = Set<String>()
-        var apps: [(String, String)] = []
-        for item in store.items + store.pinboards.flatMap(\.items) {
-            guard let bundleID = item.sourceBundleID, seen.insert(bundleID).inserted else { continue }
-            apps.append((bundleID, Self.appName(for: bundleID)))
+        var orderedIDs: [String] = []
+        func collect(_ list: [ClipboardItem]) {
+            for item in list {
+                guard let bundleID = item.sourceBundleID, seen.insert(bundleID).inserted else { continue }
+                orderedIDs.append(bundleID)
+            }
         }
-        availableApps = apps
+        collect(store.items)
+        for board in store.pinboards { collect(board.items) }
+
+        guard seen != lastAppBundleIDs else { return }
+        lastAppBundleIDs = seen
+        availableApps = orderedIDs.map { ($0, Self.appName(for: $0)) }
     }
 
     /// 内联重命名标签状态
@@ -863,6 +884,8 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     var shouldStayVisibleWhenPanelResignsKey: (() -> Bool)?
     /// 当预览/编辑/设置等辅助窗口打开时，面板不应拦截 Delete、Space、Return 等按键。
     var shouldSuppressKeyHandling: (() -> Bool)?
+    /// 面板即将显示时触发：用于让监听器立即抓取一次剪贴板，保证展示的是最新内容。
+    var onWillShow: (() -> Void)?
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
@@ -912,6 +935,7 @@ final class PanelController: NSObject, NSWindowDelegate, NSPopoverDelegate {
 
     func show() {
         previousApp = NSWorkspace.shared.frontmostApplication
+        onWillShow?()
         if panel == nil { makePanel() }
         guard let panel else { return }
 

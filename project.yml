@@ -17,6 +17,7 @@ targets:
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
         COMBINE_HIDPI_IMAGES: YES
+        OTHER_LDFLAGS: "$(inherited) -lsqlite3"
       configs:
         Release:
           SWIFT_OPTIMIZATION_LEVEL: -O

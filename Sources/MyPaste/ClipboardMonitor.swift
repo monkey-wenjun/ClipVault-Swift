@@ -35,9 +35,11 @@ final class ClipboardMonitor: NSObject {
         super.init()
         lastChangeCount = NSPasteboard.general.changeCount
         updateFrontmostApp()
-        NotificationCenter.default.addObserver(
+        // 应用切换事件由 NSWorkspace 自己的通知中心投递，而非 NotificationCenter.default。
+        // 之前注册在 default 上导致该回调启动后从不触发。
+        NSWorkspace.shared.notificationCenter.addObserver(
             self,
-            selector: #selector(updateFrontmostApp),
+            selector: #selector(activeAppChanged),
             name: NSWorkspace.didActivateApplicationNotification,
             object: nil
         )
@@ -47,19 +49,34 @@ final class ClipboardMonitor: NSObject {
         frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
     }
 
+    /// 应用切换即事件驱动的即时检查：先用「切换前」的前台应用归因立即抓一次剪贴板变化
+    /// （复制后切走的场景由此瞬间收录，不必等下一次轮询），再更新前台应用缓存。
+    @objc private func activeAppChanged() {
+        tick()
+        updateFrontmostApp()
+    }
+
     func start() {
-        timer = Timer.scheduledTimer(timeInterval: 0.5, target: self,
-                                     selector: #selector(tick), userInfo: nil, repeats: true)
+        let timer = Timer(timeInterval: 0.3, target: self,
+                          selector: #selector(tick), userInfo: nil, repeats: true)
+        // 加入 common 模式，避免菜单跟踪/滚动等 UI 事件循环期间轮询被饿死
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self, name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.removeObserver(self, name: NSWorkspace.didActivateApplicationNotification, object: nil)
         timer?.invalidate()
     }
 
     /// 我们自己写剪贴板后调用，避免把回写的内容当成新条目再收一遍。
     func syncChangeCount() {
         lastChangeCount = NSPasteboard.general.changeCount
+    }
+
+    /// 供外部（如展示面板前）触发的即时检查，确保面板显示的是最新剪贴板内容。
+    func checkNow() {
+        tick()
     }
 
     @objc private func tick() {

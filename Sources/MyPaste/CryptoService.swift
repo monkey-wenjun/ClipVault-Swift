@@ -9,6 +9,11 @@ enum CryptoService {
     private static let service = "com.local.ClipVault"
     private static let account = "history-key"
 
+    /// 缓存对称密钥，避免每次 encrypt/decrypt 都做一次 Keychain 查询（IPC 开销）。
+    /// 密钥在 Keychain 中是稳定的，进程内缓存后无需失效。
+    private static var cachedKey: SymmetricKey?
+    private static let keyLock = NSLock()
+
     static func encrypt(_ data: Data) -> Data? {
         guard let key = try? loadOrCreateKey(),
               let box = try? AES.GCM.seal(data, using: key) else { return nil }
@@ -24,8 +29,13 @@ enum CryptoService {
     // MARK: - Keychain
 
     private static func loadOrCreateKey() throws -> SymmetricKey {
+        keyLock.lock()
+        defer { keyLock.unlock() }
+        if let cachedKey { return cachedKey }
         if let data = try findKey() {
-            return SymmetricKey(data: data)
+            let key = SymmetricKey(data: data)
+            cachedKey = key
+            return key
         }
         let key = SymmetricKey(size: .bits256)
         let keyData = key.withUnsafeBytes { Data($0) }
@@ -41,9 +51,14 @@ enum CryptoService {
                 kSecAttrSynchronizable as String: synchronizable,
             ]
             let status = SecItemAdd(query as CFDictionary, nil)
-            if status == errSecSuccess { return key }
+            if status == errSecSuccess {
+                cachedKey = key
+                return key
+            }
             if status == errSecDuplicateItem, let existing = try findKey() {
-                return SymmetricKey(data: existing)
+                let existingKey = SymmetricKey(data: existing)
+                cachedKey = existingKey
+                return existingKey
             }
         }
         throw NSError(domain: NSOSStatusErrorDomain, code: Int(errSecIO))
